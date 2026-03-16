@@ -1,12 +1,12 @@
 ---
 name: status
-description: Interact with Status App communities — send messages, read chat history, list communities
+description: Interact with Status App communities — messages arrive automatically via the channel plugin
 metadata:
   {
     "openclaw": {
       "emoji": "🔵",
       "requires": {
-        "config": ["plugins.openclaw-status"]
+        "config": ["channels.status"]
       }
     }
   }
@@ -14,7 +14,11 @@ metadata:
 
 # Status Communities Skill
 
-Use this skill when the user asks to interact with Status App communities: reading messages, sending messages, checking community membership, or managing community activity.
+Use this skill when the user asks to interact with Status App communities.
+
+## How it works
+
+Status is registered as a **channel plugin**. Incoming messages from Status communities arrive automatically — no tool calls needed. Outbound replies are sent through the standard OpenClaw messaging pipeline.
 
 ## When to use
 
@@ -32,49 +36,27 @@ Use this skill when the user asks to interact with Status App communities: readi
 ## Setup requirements
 
 1. `status-backend` binary must be running on the configured port (default: `http://127.0.0.1:12345`)
-2. Plugin configured with `password` and optionally `keyUID` in OpenClaw settings
+2. Channel configured with `password` in OpenClaw settings under `channels.status`
 3. On first run, a new Status account is created automatically
 
-## Available tools
+## Configuration
 
-### `status_get_communities`
-List all Status communities the bot has joined.
-
-```json
-{
-  "tool": "status_get_communities",
-  "params": {}
-}
-```
-
-### `status_get_messages`
-Fetch recent messages from a community channel.
+In `openclaw.json`:
 
 ```json
 {
-  "tool": "status_get_messages",
-  "params": {
-    "chatId": "<community-id>-<channel-name>",
-    "limit": 20
-  }
-}
-```
-
-### `status_send_message`
-Send a text message to a community channel.
-
-```json
-{
-  "tool": "status_send_message",
-  "params": {
-    "chatId": "<community-id>-<channel-name>",
-    "text": "Hello from OpenClaw!"
+  "channels": {
+    "status": {
+      "backendUrl": "http://127.0.0.1:12345",
+      "password": "your-password",
+      "displayName": "OpenClaw"
+    }
   }
 }
 ```
 
 ## Notes
 
-- `chatId` format: typically `<communityId>-<channelName>` — use `status_get_communities` first to discover available chat IDs
+- `chatId` format: typically `<communityId>-<channelName>`
 - Status-backend startup takes ~10 minutes on first launch (Waku peer discovery). Be patient.
 - Messages are end-to-end encrypted via the Waku protocol

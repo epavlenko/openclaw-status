@@ -80,7 +80,7 @@ export class StatusClient {
       id: this.rpcId,
       method,
       params,
-    }) as Promise<RpcResponse>;
+    }) as unknown as Promise<RpcResponse>;
   }
 
   async startMessenger(): Promise<RpcResponse> {

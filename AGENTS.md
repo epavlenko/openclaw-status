@@ -1,6 +1,6 @@
 # AGENTS.md — openclaw-status
 
-OpenClaw plugin for Status App communities. Sends and receives messages in Status communities via Waku protocol using status-backend.
+OpenClaw channel plugin for Status App communities. Sends and receives messages privately in Status communities via Logos messaging (Waku protocol) using status-backend.
 
 **Stack:** TypeScript, Node.js, OpenClaw Plugin SDK, status-backend (Go binary).
 
@@ -10,6 +10,7 @@ OpenClaw plugin for Status App communities. Sends and receives messages in Statu
 npm install
 npm run build         # compile TypeScript
 npm run dev           # watch mode
+npm run test          # run tests (vitest)
 npm run lint          # type-check only
 ```
 
@@ -17,8 +18,11 @@ npm run lint          # type-check only
 
 ```
 OpenClaw Agent
-    ↓ registerTool()
-src/index.ts           — plugin entry, registers tools
+    ↓ registerChannel()
+src/index.ts           — plugin entry, registers channel
+src/channel.ts         — ChannelPlugin object (gateway, outbound, config adapters)
+src/config.ts          — account types, resolution, defaults
+src/runtime.ts         — PluginRuntime store
 src/status-client.ts   — HTTP + WebSocket client for status-backend
 skills/status/SKILL.md — agent playbook
     ↓ HTTP/WS
@@ -27,24 +31,88 @@ status-backend (Go, port 12345)
 Status Community
 ```
 
+### Inbound flow
+```
+Status Community → Waku → status-backend → WebSocket signal (messages.new)
+  → channel.ts gateway.startAccount() listener
+  → runtime.channel.reply.handleInboundMessage()
+  → OpenClaw agent processes message
+```
+
+### Outbound flow
+```
+OpenClaw agent reply → outbound.sendText()
+  → activeClients.get(accountId).client.sendChatMessage()
+  → status-backend → Waku → Status Community
+```
+
 ## Plugin Structure
 
 | File | Purpose |
 |------|---------|
-| `openclaw.plugin.json` | Plugin manifest, configSchema |
-| `src/index.ts` | Plugin entry — `register(api)`, tool registration |
-| `src/status-client.ts` | TypeScript port of `status_client.py` |
+| `openclaw.plugin.json` | Plugin manifest, channels declaration, configSchema |
+| `src/index.ts` | Plugin entry — `register(api)`, channel registration |
+| `src/channel.ts` | `statusPlugin` — gateway, outbound, config adapters |
+| `src/config.ts` | Account types, `resolveStatusAccount()`, `listStatusAccountIds()` |
+| `src/runtime.ts` | `getStatusRuntime()` / `setStatusRuntime()` |
+| `src/status-client.ts` | TypeScript port of `status_client.py` — HTTP + WS client |
 | `skills/status/SKILL.md` | Agent playbook |
+| `test/config.test.ts` | Config resolution unit tests |
+| `test/channel.test.ts` | Channel plugin contract tests |
 
-## Registered Tools
+## Channel Adapters (v0.1)
 
-| Tool | Description |
-|------|-------------|
-| `status_get_communities` | List joined communities |
-| `status_get_messages` | Fetch recent messages from a channel |
-| `status_send_message` | Send a text message to a channel |
+| Adapter | Status | Description |
+|---------|--------|-------------|
+| `config` | ✅ | listAccountIds, resolveAccount, isConfigured, describeAccount |
+| `gateway` | ✅ | startAccount — connect, login, listen for messages |
+| `outbound` | ✅ | sendText — send messages to community channels |
+| `setup` | — | v0.2: onboarding wizard |
+| `security` | — | v0.2: channel policies |
+| `status` | — | v0.2: health checks |
+| `groups` | — | v0.3: community/channel management |
+| `messaging` | — | v0.3: target parsing |
+| `directory` | — | v0.3: member/channel listing |
+| `threading` | — | v0.4: reply threads |
+| `actions` | — | v0.4: reactions, edit, delete |
 
-## Config (openclaw.json `plugins.openclaw-status`)
+## Config (openclaw.json `channels.status`)
+
+### Flat config (single account)
+```json
+{
+  "channels": {
+    "status": {
+      "backendUrl": "http://127.0.0.1:12345",
+      "password": "your-password",
+      "keyUID": "0x...",
+      "dataDir": "~/.openclaw/data/openclaw-status",
+      "displayName": "OpenClaw"
+    }
+  }
+}
+```
+
+### Multi-account config
+```json
+{
+  "channels": {
+    "status": {
+      "accounts": {
+        "prod": {
+          "backendUrl": "http://prod:12345",
+          "password": "prod-pass",
+          "keyUID": "0xabc"
+        },
+        "staging": {
+          "backendUrl": "http://staging:12345",
+          "password": "staging-pass"
+        }
+      }
+    }
+  }
+}
+```
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -83,6 +151,9 @@ Status Community
 
 ## Roadmap
 
-- **v0.1 (current):** Tool-only plugin — agent can read/send messages via registered tools
-- **v0.2:** Background service — listen for incoming messages, notify agent
-- **v0.3:** Channel plugin — Status as a full OpenClaw messaging channel (users interact from Status App)
+- **v0.1 (current):** Channel plugin — gateway + outbound + config adapters
+- **v0.2:** Setup wizard, Zod validation, health checks
+- **v0.3:** Community/channel management, allowlist, directory
+- **v0.4:** Rich messaging (threads, reactions, media)
+- **v0.5:** DM support, pairing, typing indicators
+- **v1.0:** Production ready, marketplace

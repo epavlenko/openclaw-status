@@ -1,8 +1,9 @@
 {
   "id": "openclaw-status",
   "name": "Status Communities",
-  "description": "Status App channel plugin — send and receive messages in Status communities via Waku protocol. Supports community management, message history, and member operations.",
+  "description": "Status App channel plugin — send and receive messages privately in Status communities via Logos messaging (Waku protocol).",
   "version": "0.1.0",
+  "channels": ["status"],
   "skills": ["skills/status"],
   "configSchema": {
     "type": "object",
