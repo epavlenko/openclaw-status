@@ -1,0 +1,43 @@
+{
+  "id": "openclaw-status",
+  "name": "Status Communities",
+  "description": "Status App channel plugin — send and receive messages in Status communities via Waku protocol. Supports community management, message history, and member operations.",
+  "version": "0.1.0",
+  "skills": ["skills/status"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "backendUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:12345",
+        "description": "URL of the running status-backend process"
+      },
+      "keyUID": {
+        "type": "string",
+        "description": "Status account key UID for re-login (obtained after first CreateAccountAndLogin)"
+      },
+      "password": {
+        "type": "string",
+        "description": "Status account password"
+      },
+      "dataDir": {
+        "type": "string",
+        "default": "~/.openclaw/data/openclaw-status",
+        "description": "Directory for status-backend data (keystore, DB, wallet)"
+      },
+      "displayName": {
+        "type": "string",
+        "default": "OpenClaw",
+        "description": "Display name for the Status account (used on first account creation only)"
+      }
+    },
+    "required": ["password"]
+  },
+  "uiHints": {
+    "backendUrl": { "label": "Status Backend URL", "placeholder": "http://127.0.0.1:12345" },
+    "keyUID": { "label": "Account Key UID", "placeholder": "0x..." },
+    "password": { "label": "Account Password", "sensitive": true },
+    "dataDir": { "label": "Data Directory", "placeholder": "~/.openclaw/data/openclaw-status" }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "openclaw-status",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin for Status App communities — send/receive messages via Waku protocol",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "openclaw": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "openclaw",
+    "status",
+    "waku",
+    "web3",
+    "messaging",
+    "community"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
