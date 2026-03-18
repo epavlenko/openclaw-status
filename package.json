@@ -13,6 +13,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "bash test/e2e-tool.sh",
     "lint": "tsc --noEmit"
   },
   "keywords": [

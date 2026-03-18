@@ -21,14 +21,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setStatusRuntime(api.runtime);
     api.registerChannel({ plugin: statusPlugin });
-    const tool = buildCommunityTool(api.config);
-    console.log(`[status] Registering tool: ${tool.name}`);
-    try {
-      api.registerTool(tool);
-      console.log(`[status] Tool ${tool.name} registered successfully`);
-    } catch (err) {
-      console.error(`[status] Failed to register tool ${tool.name}:`, err);
-    }
+    api.registerTool(buildCommunityTool(api.config));
   },
 };
 
