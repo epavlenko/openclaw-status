@@ -1,12 +1,12 @@
 ---
 name: status
-description: Interact with Status App communities — messages arrive automatically via the channel plugin
+description: "Join, leave, and interact with Status App communities and channels. Handles status.app links (status.app/c/, status.app/cc/), community hex IDs (0x...), and community management."
 metadata:
   {
     "openclaw": {
       "emoji": "🔵",
       "requires": {
-        "config": ["channels.status"]
+        "config": ["plugins.entries.openclaw-status.config"]
       }
     }
   }
@@ -14,52 +14,45 @@ metadata:
 
 # Status Communities Skill
 
-Use this skill when the user asks to interact with Status App communities.
+Use this skill when the user asks anything about Status App communities — joining, leaving, listing, or messaging.
 
-## How it works
+**IMPORTANT:** When the user asks to join a community or shares a `status.app` link, use the `status_community` tool. Do NOT open a browser or use Chrome. This is a backend operation.
 
-Status is registered as a **channel plugin**. Incoming messages from Status communities arrive automatically — no tool calls needed. Outbound replies are sent through the standard OpenClaw messaging pipeline.
+## Community management — use the `status_community` tool
 
-For community management, use the `status_community` tool:
-- `status_community(action: "join", communityId: "0x04..." or "https://status.app/c/...")` — join a community
-- `status_community(action: "list")` — list configured, saved, and joined communities
-- `status_community(action: "leave", communityId: "0x04...")` — remove from auto-join list
+**Join a community** (by hex ID, `status.app/c/...`, or `status.app/cc/...` link):
+```
+status_community(action: "join", communityId: "<hex ID or full URL>")
+```
 
-Joined communities are persisted across restarts in `communities.json`.
+**List communities:**
+```
+status_community(action: "list")
+```
+
+**Leave a community:**
+```
+status_community(action: "leave", communityId: "<hex ID or full URL>")
+```
+
+Pass the full URL or hex ID as-is — the plugin parses it automatically.
+
+## Messaging
+
+Incoming messages from joined Status communities arrive automatically via the channel plugin — no tool calls needed. Outbound replies are sent through the standard OpenClaw messaging pipeline.
 
 ## When to use
 
-- "What's happening in my Status community?"
-- "Send a message to the general channel in Status"
-- "Check the latest messages in Status"
-- "What communities am I in?"
+- User shares a `status.app/c/...` or `status.app/cc/...` link
 - "Join this Status community: 0x04abc..."
 - "Join this community: https://status.app/c#zQ3..."
+- "What communities am I in?"
+- "Leave community X"
+- "What's happening in my Status community?"
+- "Send a message to the general channel in Status"
 
 ## When NOT to use
 
 - Regular chat or messaging unrelated to Status App
 - Status.im website or Status wallet operations
 - Waku protocol configuration (use status-backend directly)
-
-## Setup requirements
-
-1. Plugin installed via `openclaw plugins install --link .`
-2. Password configured via `openclaw config set plugins.entries.openclaw-status.config.password "..."`
-3. The gateway auto-starts status-backend if not running (builds from source if needed)
-4. On first run, a new Status account is created automatically
-
-## Configuration
-
-Via OpenClaw CLI:
-
-```bash
-openclaw config set plugins.entries.openclaw-status.config.password "your-password"
-openclaw config set plugins.entries.openclaw-status.config.displayName "OpenClaw"
-```
-
-## Notes
-
-- `chatId` format: typically `<communityId>-<channelName>`
-- Status-backend startup takes ~10 minutes on first launch (Waku peer discovery). Be patient.
-- Messages are end-to-end encrypted via the Waku protocol
