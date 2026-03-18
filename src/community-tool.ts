@@ -93,7 +93,7 @@ export function buildCommunityTool(config: Record<string, unknown>) {
           communityId,
           persisted: added,
           joinRequestSent: false,
-          note: "Gateway not running. Community will be joined on next gateway start.",
+          note: "Status backend is not connected (status-backend process may not be running). Community ID saved — join will happen automatically when the Status channel connects.",
         });
       }
 
