@@ -1,8 +1,8 @@
 /**
- * Minimal type stubs for openclaw/plugin-sdk/core.
+ * Minimal type stubs for openclaw/plugin-sdk.
  * These are provided at runtime by the OpenClaw host.
  */
-declare module "openclaw/plugin-sdk/core" {
+declare module "openclaw/plugin-sdk" {
   export interface OpenClawPluginApi {
     id: string;
     name: string;

@@ -5,8 +5,8 @@
  * in Status communities automatically via the standard messaging pipeline.
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { statusPlugin, getActiveClient, parseCommunityId } from "./channel.js";
 import { resolveStatusAccount } from "./config.js";
 import { setStatusRuntime } from "./runtime.js";
