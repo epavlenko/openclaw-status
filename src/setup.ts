@@ -187,13 +187,10 @@ export function startBackendProcess(
 /**
  * Ensure status-backend is reachable at `url`.
  *
- * Lightweight — only finds an existing binary and starts it.
- * Does NOT download Go or build from source (use `ensureBackendBinary` for that).
- *
  *   1. Already running? → done
  *   2. Explicit binaryPath? → use it
  *   3. Find on PATH / common locations
- *   4. Not found → fail fast with instructions
+ *   4. Not found → build from source (install Go if needed, clone status-go)
  *   5. Start and wait for healthy
  */
 export async function ensureBackend(
@@ -220,16 +217,18 @@ export async function ensureBackend(
     resolvedBinary = abs;
   } else {
     const found = findBackendBinary();
-    if (!found) {
-      return {
-        ok: false,
-        started: false,
-        error:
-          "status-backend not found. Install it and set the path:\n" +
-          '  openclaw config set plugins.entries.openclaw-status.config.backendBinary "/path/to/status-backend"',
-      };
+    if (found) {
+      resolvedBinary = found;
+    } else {
+      // Build from source (downloads Go if needed, clones status-go, builds)
+      console.log("[status] status-backend not found, building from source...");
+      const buildResult = ensureBackendBinary();
+      if ("error" in buildResult) {
+        return { ok: false, started: false, error: buildResult.error };
+      }
+      resolvedBinary = buildResult.path;
+      console.log(`[status] Built status-backend: ${resolvedBinary}`);
     }
-    resolvedBinary = found;
   }
 
   // 5. Start

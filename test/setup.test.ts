@@ -46,11 +46,12 @@ describe("ensureBackend", () => {
     expect(r.error).toMatch(/Binary not found/);
   });
 
-  it("returns error when no binary found (no auto-build)", async () => {
+  it("attempts auto-build when no binary found", async () => {
     const r = await ensureBackend("http://127.0.0.1:19999");
-    // Should fail fast without attempting to download Go or build
+    // Either succeeds (binary built) or fails with a build/Go error
+    // — should NOT fail with "not found", because it tries to build
     if (!r.ok) {
-      expect(r.error).toMatch(/status-backend not found/);
+      expect(r.error).not.toMatch(/status-backend not found/);
     }
   });
 });
