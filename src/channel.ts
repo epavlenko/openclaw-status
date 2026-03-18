@@ -13,6 +13,62 @@ import {
   type ResolvedStatusAccount,
 } from "./config.js";
 import { getStatusRuntime } from "./runtime.js";
+import { ensureBackend } from "./setup.js";
+import { loadCommunityStore } from "./community-store.js";
+
+// ---------------------------------------------------------------------------
+// Community join helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a community identifier — accepts raw hex ID or a Status invite link.
+ *
+ * Status invite links have the format:
+ *   https://status.app/c/<base64url-encoded-data>#<community-key>
+ *   https://status.app/c#/<community-key>
+ *
+ * The community key after `#` (or `#/`) is used as the community ID.
+ * If the input starts with `0x`, it is treated as a raw hex community ID.
+ */
+export function parseCommunityId(input: string): string {
+  const trimmed = input.trim();
+
+  // Raw hex ID
+  if (trimmed.startsWith("0x")) return trimmed;
+
+  // Status invite link — extract community key from fragment
+  try {
+    const url = new URL(trimmed);
+    if (url.hash) {
+      const key = url.hash.replace(/^#\/?/, "");
+      if (key.length > 0) return key;
+    }
+  } catch {
+    // Not a URL — use as-is
+  }
+
+  return trimmed;
+}
+
+async function joinCommunityIfNeeded(
+  client: StatusClient,
+  rawCommunityId: string,
+): Promise<void> {
+  const communityId = parseCommunityId(rawCommunityId);
+
+  // Check if already joined
+  const joined = await client.joinedCommunities();
+  const alreadyJoined = joined.some((c) => c.id === communityId);
+
+  if (alreadyJoined) {
+    console.log(`[status] Already a member of community ${communityId.slice(0, 16)}...`);
+    return;
+  }
+
+  console.log(`[status] Requesting to join community ${communityId.slice(0, 16)}...`);
+  await client.joinCommunity(communityId);
+  console.log(`[status] Join request sent for community ${communityId.slice(0, 16)}...`);
+}
 
 // ---------------------------------------------------------------------------
 // Active client registry (one per account, like Nostr's activeBuses)
@@ -24,6 +80,10 @@ interface ActiveAccount {
 }
 
 const activeClients = new Map<string, ActiveAccount>();
+
+export function getActiveClient(accountId = "default"): ActiveAccount | undefined {
+  return activeClients.get(accountId);
+}
 
 // ---------------------------------------------------------------------------
 // Channel plugin definition
@@ -49,7 +109,7 @@ export const statusPlugin = {
     media: false,
   },
 
-  reload: { configPrefixes: ["channels.status"] },
+  reload: { configPrefixes: ["plugins.entries.openclaw-status.config", "channels.status"] },
 
   // ---------------------------------------------------------------------------
   // Config adapter
@@ -92,8 +152,25 @@ export const statusPlugin = {
     }) => {
       const { accountId, account, setStatus } = ctx;
       const runtime = getStatusRuntime();
-      const client = new StatusClient({ baseUrl: account.backendUrl });
       const abortController = new AbortController();
+
+      // Ensure status-backend is running (auto-provision if needed)
+      setStatus({ provisioning: true });
+      const backendResult = await ensureBackend(
+        account.backendUrl,
+        account.backendBinary,
+      );
+      if (!backendResult.ok) {
+        const msg = backendResult.error ?? "Failed to provision status-backend";
+        setStatus({ connected: false, running: false, lastError: msg, provisioning: false });
+        throw new Error(`[status] Backend provisioning failed: ${msg}`);
+      }
+      if (backendResult.started) {
+        console.log(`[status] Auto-started status-backend (${backendResult.binaryPath})`);
+      }
+      setStatus({ provisioning: false });
+
+      const client = new StatusClient({ baseUrl: account.backendUrl });
 
       // Initialize and login
       try {
@@ -110,6 +187,15 @@ export const statusPlugin = {
         }
 
         await client.startMessenger();
+
+        // Auto-join communities from config + persistent store
+        const stored = await loadCommunityStore(account.dataDir);
+        const allCommunityIds = [
+          ...new Set([...account.communityIds, ...stored.communityIds]),
+        ];
+        for (const cid of allCommunityIds) {
+          await joinCommunityIfNeeded(client, cid);
+        }
 
         setStatus({ connected: true, running: true, lastConnectedAt: Date.now() });
         console.log(`[status] Account ${accountId} connected`);

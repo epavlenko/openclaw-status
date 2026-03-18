@@ -121,5 +121,110 @@ describe("config", () => {
       expect(account.accountId).toBe("nonexistent");
       expect(account.configured).toBe(false);
     });
+
+    it("resolves backendBinary when set", () => {
+      const cfg = {
+        channels: {
+          status: {
+            password: "test",
+            backendBinary: "/usr/local/bin/status-backend",
+          },
+        },
+      };
+      const account = resolveStatusAccount(cfg);
+      expect(account.backendBinary).toBe("/usr/local/bin/status-backend");
+    });
+
+    it("backendBinary is undefined when not set", () => {
+      const cfg = { channels: { status: { password: "test" } } };
+      const account = resolveStatusAccount(cfg);
+      expect(account.backendBinary).toBeUndefined();
+    });
+
+    it("resolves communityIds from a single string", () => {
+      const cfg = {
+        plugins: {
+          entries: {
+            "openclaw-status": {
+              config: {
+                password: "test",
+                communityIds: "0x04abc123",
+              },
+            },
+          },
+        },
+      };
+      const account = resolveStatusAccount(cfg);
+      expect(account.communityIds).toEqual(["0x04abc123"]);
+    });
+
+    it("resolves communityIds from an array", () => {
+      const cfg = {
+        plugins: {
+          entries: {
+            "openclaw-status": {
+              config: {
+                password: "test",
+                communityIds: ["0x04abc123", "0x04def456"],
+              },
+            },
+          },
+        },
+      };
+      const account = resolveStatusAccount(cfg);
+      expect(account.communityIds).toEqual(["0x04abc123", "0x04def456"]);
+    });
+
+    it("communityIds is empty array when not set", () => {
+      const cfg = { channels: { status: { password: "test" } } };
+      const account = resolveStatusAccount(cfg);
+      expect(account.communityIds).toEqual([]);
+    });
+  });
+
+  describe("plugins.entries config path (primary)", () => {
+    it("reads flat config from plugins.entries.openclaw-status.config", () => {
+      const cfg = {
+        plugins: {
+          entries: {
+            "openclaw-status": {
+              config: {
+                backendUrl: "http://localhost:9999",
+                password: "plugin-pass",
+              },
+            },
+          },
+        },
+      };
+      expect(listStatusAccountIds(cfg)).toEqual(["default"]);
+      const account = resolveStatusAccount(cfg);
+      expect(account.password).toBe("plugin-pass");
+      expect(account.backendUrl).toBe("http://localhost:9999");
+    });
+
+    it("plugins.entries takes priority over channels.status", () => {
+      const cfg = {
+        plugins: {
+          entries: {
+            "openclaw-status": {
+              config: { password: "from-plugin" },
+            },
+          },
+        },
+        channels: {
+          status: { password: "from-channel" },
+        },
+      };
+      const account = resolveStatusAccount(cfg);
+      expect(account.password).toBe("from-plugin");
+    });
+
+    it("falls back to channels.status when plugins.entries is absent", () => {
+      const cfg = {
+        channels: { status: { password: "fallback" } },
+      };
+      const account = resolveStatusAccount(cfg);
+      expect(account.password).toBe("fallback");
+    });
   });
 });

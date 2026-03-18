@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { statusPlugin } from "../src/channel.js";
+import { statusPlugin, parseCommunityId } from "../src/channel.js";
 
 describe("statusPlugin contract", () => {
   it("has required id", () => {
@@ -34,6 +34,32 @@ describe("statusPlugin contract", () => {
     expect(statusPlugin.outbound.deliveryMode).toBe("direct");
     expect(typeof statusPlugin.outbound.sendText).toBe("function");
     expect(typeof statusPlugin.outbound.textChunkLimit).toBe("number");
+  });
+
+  it("does not expose a setup adapter (OpenClaw manages config)", () => {
+    expect((statusPlugin as Record<string, unknown>)["setup"]).toBeUndefined();
+  });
+
+  describe("parseCommunityId", () => {
+    it("returns raw hex ID as-is", () => {
+      expect(parseCommunityId("0x04abc123")).toBe("0x04abc123");
+    });
+
+    it("trims whitespace from hex ID", () => {
+      expect(parseCommunityId("  0x04abc123  ")).toBe("0x04abc123");
+    });
+
+    it("extracts community key from status.app link with hash fragment", () => {
+      expect(parseCommunityId("https://status.app/c#zQ3abc123")).toBe("zQ3abc123");
+    });
+
+    it("extracts community key from status.app link with #/ fragment", () => {
+      expect(parseCommunityId("https://status.app/c#/zQ3abc123")).toBe("zQ3abc123");
+    });
+
+    it("returns non-URL non-hex string as-is", () => {
+      expect(parseCommunityId("someCommunityKey")).toBe("someCommunityKey");
+    });
   });
 
   it("config.listAccountIds works with empty config", () => {

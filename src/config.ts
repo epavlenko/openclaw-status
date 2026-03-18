@@ -10,20 +10,24 @@
 
 export interface StatusAccountConfig {
   backendUrl?: string;
+  backendBinary?: string;
   keyUID?: string;
   password?: string;
   dataDir?: string;
   displayName?: string;
+  communityIds?: string | string[];
   enabled?: boolean;
 }
 
 export interface ResolvedStatusAccount {
   accountId: string;
   backendUrl: string;
+  backendBinary: string | undefined;
   keyUID: string | undefined;
   password: string;
   dataDir: string;
   displayName: string;
+  communityIds: string[];
   configured: boolean;
   enabled: boolean;
 }
@@ -41,24 +45,47 @@ const DEFAULT_DISPLAY_NAME = "OpenClaw";
 // Config helpers
 // ---------------------------------------------------------------------------
 
-/** Read the `channels.status.accounts` block from OpenClaw config. */
+/**
+ * Read account config from OpenClaw config.
+ *
+ * Priority:
+ *   1. plugins.entries.openclaw-status.config  (how OpenClaw stores plugin config)
+ *   2. channels.status                          (backward compatibility)
+ */
 function readAccountsBlock(
   cfg: Record<string, unknown>,
 ): Record<string, StatusAccountConfig> {
-  const channels = (cfg as Record<string, unknown>)?.["channels"] as
-    | Record<string, unknown>
-    | undefined;
-  const status = channels?.["status"] as Record<string, unknown> | undefined;
-  const accounts = status?.["accounts"] as
-    | Record<string, StatusAccountConfig>
-    | undefined;
+  // 1. Plugin config path (primary)
+  const plugins = cfg?.["plugins"] as Record<string, unknown> | undefined;
+  const entries = plugins?.["entries"] as Record<string, unknown> | undefined;
+  const pluginEntry = entries?.["openclaw-status"] as Record<string, unknown> | undefined;
+  const pluginConfig = pluginEntry?.["config"] as Record<string, unknown> | undefined;
 
-  // Support flat config (no accounts block) — treat root as single account
-  if (!accounts && status) {
-    return { [DEFAULT_ACCOUNT_ID]: status as unknown as StatusAccountConfig };
+  if (pluginConfig) {
+    const accounts = pluginConfig["accounts"] as
+      | Record<string, StatusAccountConfig>
+      | undefined;
+    if (accounts) return accounts;
+    return { [DEFAULT_ACCOUNT_ID]: pluginConfig as unknown as StatusAccountConfig };
   }
 
-  return accounts ?? {};
+  // 2. Channel config path (backward compatibility)
+  const channels = cfg?.["channels"] as Record<string, unknown> | undefined;
+  const status = channels?.["status"] as Record<string, unknown> | undefined;
+
+  if (!status) return {};
+
+  const accounts = status["accounts"] as
+    | Record<string, StatusAccountConfig>
+    | undefined;
+  if (accounts) return accounts;
+  return { [DEFAULT_ACCOUNT_ID]: status as unknown as StatusAccountConfig };
+}
+
+function normalizeCommunityIds(raw: string | string[] | undefined): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((s) => s.length > 0);
+  return raw.length > 0 ? [raw] : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +116,12 @@ export function resolveStatusAccount(
   return {
     accountId: id,
     backendUrl: raw.backendUrl ?? DEFAULT_BACKEND_URL,
+    backendBinary: raw.backendBinary,
     keyUID: raw.keyUID,
     password,
     dataDir: raw.dataDir ?? DEFAULT_DATA_DIR,
     displayName: raw.displayName ?? DEFAULT_DISPLAY_NAME,
+    communityIds: normalizeCommunityIds(raw.communityIds),
     configured: password.length > 0,
     enabled: raw.enabled !== false,
   };

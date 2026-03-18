@@ -18,13 +18,15 @@ npm run lint          # type-check only
 
 ```
 OpenClaw Agent
-    ↓ registerChannel()
-src/index.ts           — plugin entry, registers channel
-src/channel.ts         — ChannelPlugin object (gateway, outbound, config adapters)
-src/config.ts          — account types, resolution, defaults
-src/runtime.ts         — PluginRuntime store
-src/status-client.ts   — HTTP + WebSocket client for status-backend
-skills/status/SKILL.md — agent playbook
+    ↓ registerChannel() + registerTool()
+src/index.ts              — plugin entry, registers channel + status_community tool
+src/channel.ts            — ChannelPlugin object (gateway, outbound, config adapters)
+src/config.ts             — account types, resolution, defaults
+src/community-store.ts    — persistent JSON store for dynamically joined communities
+src/setup.ts              — backend provisioning (find/build/start status-backend)
+src/runtime.ts            — PluginRuntime store
+src/status-client.ts      — HTTP + WebSocket client for status-backend
+skills/status/SKILL.md    — agent playbook
     ↓ HTTP/WS
 status-backend (Go, port 12345)
     ↓ Waku P2P
@@ -46,28 +48,55 @@ OpenClaw agent reply → outbound.sendText()
   → status-backend → Waku → Status Community
 ```
 
+### Gateway auto-provisioning
+```
+gateway.startAccount()
+  → ensureBackend(url, binaryPath?)
+    → health check — already running? done
+    → findBackendBinary() — PATH, ~/.openclaw/bin/
+    → ensureBackendBinary() — clone status-go + build (ensureGo if needed)
+    → startBackendProcess() + waitForHealthy()
+  → initialize → login → startMessenger
+  → merge config communityIds + communities.json (persistent store)
+  → joinCommunityIfNeeded() for each — deduplicated
+  → listen for signals
+```
+
+### Community join flow (runtime)
+```
+Agent receives "join community 0x04..." (from any channel)
+  → status_community tool (action: "join", communityId: "0x04...")
+  → parseCommunityId() — hex ID or Status invite link
+  → addCommunityId() → persists to ~/.openclaw/data/openclaw-status/communities.json
+  → if gateway active: joinCommunity() RPC → status-backend → Waku
+  → messages from that community start arriving via signals
+```
+
 ## Plugin Structure
 
 | File | Purpose |
 |------|---------|
 | `openclaw.plugin.json` | Plugin manifest, channels declaration, configSchema |
-| `src/index.ts` | Plugin entry — `register(api)`, channel registration |
-| `src/channel.ts` | `statusPlugin` — gateway, outbound, config adapters |
+| `src/index.ts` | Plugin entry — `register(api)`, channel + tool registration |
+| `src/channel.ts` | `statusPlugin` — gateway (with auto-provisioning), outbound, config adapters |
 | `src/config.ts` | Account types, `resolveStatusAccount()`, `listStatusAccountIds()` |
+| `src/community-store.ts` | Persistent JSON store for dynamically joined communities |
 | `src/runtime.ts` | `getStatusRuntime()` / `setStatusRuntime()` |
+| `src/setup.ts` | Backend provisioning — find/build/start status-backend, Go installation |
 | `src/status-client.ts` | TypeScript port of `status_client.py` — HTTP + WS client |
 | `skills/status/SKILL.md` | Agent playbook |
 | `test/config.test.ts` | Config resolution unit tests |
-| `test/channel.test.ts` | Channel plugin contract tests |
+| `test/channel.test.ts` | Channel plugin contract + parseCommunityId tests |
+| `test/community-store.test.ts` | Community store persistence tests |
+| `test/setup.test.ts` | Backend provisioning tests |
 
 ## Channel Adapters (v0.1)
 
 | Adapter | Status | Description |
 |---------|--------|-------------|
 | `config` | ✅ | listAccountIds, resolveAccount, isConfigured, describeAccount |
-| `gateway` | ✅ | startAccount — connect, login, listen for messages |
+| `gateway` | ✅ | startAccount — auto-provision backend, connect, login, auto-join communities, listen |
 | `outbound` | ✅ | sendText — send messages to community channels |
-| `setup` | — | v0.2: onboarding wizard |
 | `security` | — | v0.2: channel policies |
 | `status` | — | v0.2: health checks |
 | `groups` | — | v0.3: community/channel management |
@@ -76,37 +105,34 @@ OpenClaw agent reply → outbound.sendText()
 | `threading` | — | v0.4: reply threads |
 | `actions` | — | v0.4: reactions, edit, delete |
 
-## Config (openclaw.json `channels.status`)
+## Tools
 
-### Flat config (single account)
-```json
-{
-  "channels": {
-    "status": {
-      "backendUrl": "http://127.0.0.1:12345",
-      "password": "your-password",
-      "keyUID": "0x...",
-      "dataDir": "~/.openclaw/data/openclaw-status",
-      "displayName": "OpenClaw"
-    }
-  }
-}
+| Tool | Description |
+|------|-------------|
+| `status_community` | Manage communities at runtime — join (by hex ID or invite link), leave, list. Joined communities are persisted to `communities.json` in dataDir and merged with config `communityIds` on gateway start. |
+
+## Installation
+
+```bash
+npm install && npm run build
+openclaw plugins install --link .
+openclaw config set plugins.entries.openclaw-status.config.password "your-password"
 ```
 
-### Multi-account config
+## Config (`plugins.entries.openclaw-status.config`)
+
+Config is read from `plugins.entries.openclaw-status.config` (primary) with fallback to `channels.status` (backward compatibility).
+
 ```json
 {
-  "channels": {
-    "status": {
-      "accounts": {
-        "prod": {
-          "backendUrl": "http://prod:12345",
-          "password": "prod-pass",
-          "keyUID": "0xabc"
-        },
-        "staging": {
-          "backendUrl": "http://staging:12345",
-          "password": "staging-pass"
+  "plugins": {
+    "entries": {
+      "openclaw-status": {
+        "enabled": true,
+        "config": {
+          "backendUrl": "http://127.0.0.1:12345",
+          "password": "your-password",
+          "displayName": "OpenClaw"
         }
       }
     }
@@ -117,10 +143,12 @@ OpenClaw agent reply → outbound.sendText()
 | Key | Default | Description |
 |-----|---------|-------------|
 | `backendUrl` | `http://127.0.0.1:12345` | status-backend URL |
+| `backendBinary` | — | Path to status-backend executable (auto-detected if not set) |
 | `keyUID` | — | Account key UID for re-login |
 | `password` | — | **Required.** Account password |
 | `dataDir` | `~/.openclaw/data/openclaw-status` | Data directory |
 | `displayName` | `OpenClaw` | Display name (first account creation only) |
+| `communityIds` | `[]` | Community ID(s) to auto-join — hex (`0x...`) or invite link. String or array. |
 
 ## status-backend Startup Sequence
 
@@ -151,8 +179,8 @@ OpenClaw agent reply → outbound.sendText()
 
 ## Roadmap
 
-- **v0.1 (current):** Channel plugin — gateway + outbound + config adapters
-- **v0.2:** Setup wizard, Zod validation, health checks
+- **v0.1 (current):** Channel plugin — gateway + outbound + config + auto-provisioning
+- **v0.2:** Zod validation, health checks
 - **v0.3:** Community/channel management, allowlist, directory
 - **v0.4:** Rich messaging (threads, reactions, media)
 - **v0.5:** DM support, pairing, typing indicators

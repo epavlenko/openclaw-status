@@ -20,12 +20,21 @@ Use this skill when the user asks to interact with Status App communities.
 
 Status is registered as a **channel plugin**. Incoming messages from Status communities arrive automatically — no tool calls needed. Outbound replies are sent through the standard OpenClaw messaging pipeline.
 
+For community management, use the `status_community` tool:
+- `status_community(action: "join", communityId: "0x04..." or "https://status.app/c/...")` — join a community
+- `status_community(action: "list")` — list configured, saved, and joined communities
+- `status_community(action: "leave", communityId: "0x04...")` — remove from auto-join list
+
+Joined communities are persisted across restarts in `communities.json`.
+
 ## When to use
 
 - "What's happening in my Status community?"
 - "Send a message to the general channel in Status"
 - "Check the latest messages in Status"
 - "What communities am I in?"
+- "Join this Status community: 0x04abc..."
+- "Join this community: https://status.app/c#zQ3..."
 
 ## When NOT to use
 
@@ -35,24 +44,18 @@ Status is registered as a **channel plugin**. Incoming messages from Status comm
 
 ## Setup requirements
 
-1. `status-backend` binary must be running on the configured port (default: `http://127.0.0.1:12345`)
-2. Channel configured with `password` in OpenClaw settings under `channels.status`
-3. On first run, a new Status account is created automatically
+1. Plugin installed via `openclaw plugins install --link .`
+2. Password configured via `openclaw config set plugins.entries.openclaw-status.config.password "..."`
+3. The gateway auto-starts status-backend if not running (builds from source if needed)
+4. On first run, a new Status account is created automatically
 
 ## Configuration
 
-In `openclaw.json`:
+Via OpenClaw CLI:
 
-```json
-{
-  "channels": {
-    "status": {
-      "backendUrl": "http://127.0.0.1:12345",
-      "password": "your-password",
-      "displayName": "OpenClaw"
-    }
-  }
-}
+```bash
+openclaw config set plugins.entries.openclaw-status.config.password "your-password"
+openclaw config set plugins.entries.openclaw-status.config.displayName "OpenClaw"
 ```
 
 ## Notes

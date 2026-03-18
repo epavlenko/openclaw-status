@@ -31,14 +31,27 @@
         "type": "string",
         "default": "OpenClaw",
         "description": "Display name for the Status account (used on first account creation only)"
+      },
+      "backendBinary": {
+        "type": "string",
+        "description": "Path to the status-backend executable. Auto-detected or built from source if not set."
+      },
+      "communityIds": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "array", "items": { "type": "string" } }
+        ],
+        "description": "Status community ID(s) — hex (0x...) or invite link (https://status.app/c/...). Accepts a single string or an array. The plugin will auto-join these communities on gateway start."
       }
     },
-    "required": ["password"]
+    "required": []
   },
   "uiHints": {
     "backendUrl": { "label": "Status Backend URL", "placeholder": "http://127.0.0.1:12345" },
+    "backendBinary": { "label": "Backend Binary Path", "placeholder": "Auto-detected" },
     "keyUID": { "label": "Account Key UID", "placeholder": "0x..." },
     "password": { "label": "Account Password", "sensitive": true },
-    "dataDir": { "label": "Data Directory", "placeholder": "~/.openclaw/data/openclaw-status" }
+    "dataDir": { "label": "Data Directory", "placeholder": "~/.openclaw/data/openclaw-status" },
+    "communityIds": { "label": "Community IDs", "placeholder": "0x04... or [\"0x04...\", \"https://status.app/c/...\"]" }
   }
 }
