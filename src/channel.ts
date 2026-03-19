@@ -115,21 +115,38 @@ async function joinCommunityIfNeeded(
     console.warn(`[status] fetchCommunity failed (may still work): ${err}`);
   }
 
-  // Retry join — RPC methods may not be registered immediately after startMessenger
+  // Try direct join first (open communities), fallback to request (closed).
+  // Retry if RPC methods not registered yet after startMessenger.
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    console.log(`[status] Requesting to join community ${short}... (attempt ${attempt})`);
-    const result = await client.joinCommunity(communityId);
-    if (result.error) {
-      const msg = result.error.message ?? "";
-      if (msg.includes("does not exist") && attempt < maxAttempts) {
-        console.log(`[status] RPC not ready, retrying in 5s...`);
+    console.log(`[status] Joining community ${short}... (attempt ${attempt})`);
+    try {
+      const result = await client.joinCommunity(communityId);
+      if (result.error) {
+        const msg = result.error.message ?? "";
+        if (msg.includes("does not exist") && attempt < maxAttempts) {
+          console.log(`[status] RPC not ready, retrying in 5s...`);
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        // joinCommunity failed — try requestToJoinCommunity (for closed communities)
+        console.log(`[status] Direct join failed (${msg}), trying request to join...`);
+        const reqResult = await client.requestToJoinCommunity(communityId);
+        if (reqResult.error) {
+          console.error(`[status] Join request also failed: ${reqResult.error.message}`);
+        } else {
+          console.log(`[status] Join request sent for community ${short}`);
+        }
+      } else {
+        console.log(`[status] Joined community ${short}`);
+      }
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        console.log(`[status] Join error, retrying in 5s...`);
         await new Promise((r) => setTimeout(r, 5000));
         continue;
       }
-      console.error(`[status] Join failed: ${msg}`);
-    } else {
-      console.log(`[status] Join request sent for community ${short}`);
+      throw err;
     }
     break;
   }

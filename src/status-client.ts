@@ -110,8 +110,18 @@ export class StatusClient {
     return (r.result as Array<{ wallet?: boolean; address: string }>) ?? [];
   }
 
+  /**
+   * Join an open community directly.
+   * For closed communities, use requestToJoinCommunity instead.
+   */
   async joinCommunity(communityId: string): Promise<RpcResponse> {
-    // Get wallet address (required for requestToJoinCommunity)
+    return this.callRpc("wakuext_joinCommunity", [communityId]);
+  }
+
+  /**
+   * Request to join a closed community (requires owner approval).
+   */
+  async requestToJoinCommunity(communityId: string): Promise<RpcResponse> {
     const accounts = await this.getAccounts();
     const walletAddr = accounts.find((a) => a.wallet)?.address ?? "";
 
