@@ -221,6 +221,102 @@ export function getActiveClient(accountId = "default"): ActiveAccount | undefine
 }
 
 // ---------------------------------------------------------------------------
+// Inbound message handler (SDK dispatch flow, modeled after IRC plugin)
+// ---------------------------------------------------------------------------
+
+const CHANNEL_ID = "status" as const;
+
+async function handleStatusInbound(params: {
+  msg: { id: string; chatId: string; text: string; from: string; timestamp: number };
+  accountId: string;
+  cfg: Record<string, unknown>;
+  client: StatusClient;
+}): Promise<void> {
+  const { msg, accountId, cfg, client } = params;
+  const core = getStatusRuntime();
+
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel: CHANNEL_ID,
+    accountId,
+    peer: { kind: "group", id: msg.chatId },
+  });
+
+  const storePath = core.channel.session.resolveStorePath(
+    (cfg as Record<string, unknown>)?.["session"]
+      ? ((cfg as Record<string, unknown>)["session"] as Record<string, unknown>)?.["store"]
+      : undefined,
+    { agentId: route.agentId },
+  );
+
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
+
+  const body = core.channel.reply.formatAgentEnvelope({
+    channel: "Status",
+    from: msg.from.slice(0, 16),
+    timestamp: msg.timestamp,
+    previousTimestamp,
+    envelope: envelopeOptions,
+    body: msg.text,
+  });
+
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
+    Body: body,
+    RawBody: msg.text,
+    CommandBody: msg.text,
+    From: `status:group:${msg.chatId.slice(0, 20)}`,
+    To: `status:${msg.chatId.slice(0, 20)}`,
+    SessionKey: route.sessionKey,
+    AccountId: route.accountId,
+    ChatType: "group",
+    ConversationLabel: msg.chatId.slice(0, 20),
+    SenderId: msg.from,
+    Provider: CHANNEL_ID,
+    Surface: CHANNEL_ID,
+    MessageSid: msg.id,
+    Timestamp: msg.timestamp,
+    OriginatingChannel: CHANNEL_ID,
+    OriginatingTo: `status:${msg.chatId.slice(0, 20)}`,
+  });
+
+  // Record inbound session
+  try {
+    await core.channel.session.recordInboundSession({
+      storePath,
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      ctx: ctxPayload,
+      onRecordError: (err: unknown) => {
+        console.error(`[status] session record error: ${String(err)}`);
+      },
+    });
+  } catch (err) {
+    console.error(`[status] session record error: ${String(err)}`);
+  }
+
+  // Dispatch reply via agent
+  const deliver = async (payload: { text?: string; replyToId?: string }) => {
+    const text = payload.text ?? "";
+    if (!text) return;
+    await client.sendChatMessage(msg.chatId, text);
+  };
+
+  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
+    cfg,
+    dispatcherOptions: {
+      deliver,
+      onError: (err: unknown, info: { kind: string }) => {
+        console.error(`[status] ${info.kind} reply error: ${String(err)}`);
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Channel plugin definition
 // ---------------------------------------------------------------------------
 
@@ -334,6 +430,11 @@ export const statusPlugin = {
 
         if (type !== "messages.new") return;
 
+        // Debug: log raw signal event keys and messages
+        const eventKeys = Object.keys(event ?? {});
+        const rawMsgs = (event?.["messages"] as Array<Record<string, unknown>>) ?? [];
+        console.log(`[status] messages.new: keys=[${eventKeys.join(",")}], messages=${rawMsgs.length}, chats_count=${((event?.["chats"] as unknown[]) ?? []).length}`);
+
         const messages = (event?.["messages"] as Array<{
           id: string;
           chatId: string;
@@ -345,17 +446,16 @@ export const statusPlugin = {
 
         for (const msg of messages) {
           if (msg.contentType !== 1) continue;
+          if (!msg.text?.trim()) continue;
+
+          console.log(`[status] Inbound from ${msg.from.slice(0, 16)}... in ${msg.chatId.slice(0, 16)}...: "${msg.text.slice(0, 50)}"`);
 
           try {
-            await runtime.channel?.reply?.handleInboundMessage?.({
-              channel: "status",
+            await handleStatusInbound({
+              msg,
               accountId,
-              senderId: msg.from,
-              chatType: "group",
-              chatId: msg.chatId,
-              text: msg.text,
-              messageId: msg.id,
-              timestamp: msg.timestamp,
+              cfg: ctx.cfg,
+              client,
             });
           } catch (err) {
             console.error("[status] Failed to handle inbound message:", err);
@@ -479,6 +579,20 @@ export const statusPlugin = {
             } catch (err) {
               console.error(`[status] Failed to join community ${cid}:`, err);
             }
+          }
+
+          // Spectate ALL joined communities — subscribes to Waku pubsub topics.
+          // Required after every restart to receive messages.
+          try {
+            const joined = await client.joinedCommunities();
+            for (const c of joined) {
+              if (c.id) {
+                console.log(`[status] Spectating joined community ${c.id.slice(0, 16)}...`);
+                await client.spectateCommunity(c.id);
+              }
+            }
+          } catch (err) {
+            console.warn(`[status] Failed to spectate joined communities: ${err}`);
           }
         })();
       } catch (err) {
