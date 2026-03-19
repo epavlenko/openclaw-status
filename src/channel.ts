@@ -172,18 +172,32 @@ export const statusPlugin = {
 
       const client = new StatusClient({ baseUrl: account.backendUrl });
 
-      // Initialize and login
+      // Initialize and login (skip if already logged in on a running node)
       try {
-        await client.initialize(account.dataDir);
+        // Check if already logged in — LoginAccount on running node causes crash
+        let alreadyLoggedIn = false;
+        try {
+          const settings = await client.getSettings();
+          if (settings && Object.keys(settings).length > 0) {
+            alreadyLoggedIn = true;
+            console.log(`[status] Backend already logged in, skipping initialize/login`);
+          }
+        } catch {
+          // Not logged in or backend not initialized — proceed with login
+        }
 
-        if (account.keyUID) {
-          await client.login(account.keyUID, account.password);
-        } else {
-          await client.createAccount(
-            account.displayName,
-            account.password,
-            account.dataDir,
-          );
+        if (!alreadyLoggedIn) {
+          await client.initialize(account.dataDir);
+
+          if (account.keyUID) {
+            await client.login(account.keyUID, account.password);
+          } else {
+            await client.createAccount(
+              account.displayName,
+              account.password,
+              account.dataDir,
+            );
+          }
         }
 
         // startMessenger blocks for ~10 min on first launch (Waku peer discovery).
