@@ -484,14 +484,16 @@ export const statusPlugin = {
 
       activeClients.set(accountId, { client, abortController });
 
-      return {
-        stop: () => {
-          abortController.abort();
-          activeClients.delete(accountId);
-          setStatus({ connected: false, running: false, lastStopAt: Date.now() });
-          console.log(`[status] Account ${accountId} stopped`);
-        },
-      };
+      // Keep alive — gateway expects startAccount to stay pending.
+      // When startAccount's promise resolves, the gateway sets running=false
+      // and triggers auto-restart. We must await the abort signal.
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      // Cleanup after abort
+      activeClients.delete(accountId);
+      console.log(`[status] Account ${accountId} stopped`);
     },
   },
 
