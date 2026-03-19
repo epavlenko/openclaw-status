@@ -18,7 +18,7 @@ FAIL=0
 cleanup() {
   if [ -f "$DATA_DIR/communities.json" ]; then
     local tmp
-    tmp=$(jq '{communityIds: [.communityIds[] | select(startswith("0xe2etest") or startswith("zQ3e2e") | not)]}' \
+    tmp=$(jq '{communityIds: [.communityIds[] | select(startswith("0xe2etest") or . == "0x1f373d2e0d0512025a" or . == "0x026021e0c3665b2a" | not)]}' \
       "$DATA_DIR/communities.json" 2>/dev/null || echo '{"communityIds":[]}')
     echo "$tmp" > "$DATA_DIR/communities.json"
   fi
@@ -68,14 +68,16 @@ ask "Присоединись к Status-коммьюнити $TEST_ID. Испо�
 assert_in_store "$TEST_ID" "community ID persisted to store"
 
 # ---------- Test 2: join with status.app link ----------
+# zQ3e2eTestKey decodes to 0x1f373d2e0d0512025a via parseCommunityId
 echo "Test 2: join community by status.app link"
 ask "Присоединись к Status-коммьюнити https://status.app/c#zQ3e2eTestKey. Используй tool status_community с action join."
-assert_in_store "zQ3e2eTestKey" "parsed community key persisted"
+assert_in_store "0x1f373d2e0d0512025a" "parsed community key persisted (decoded to hex)"
 
 # ---------- Test 3: join with /cc link ----------
+# zQ3e2eCcKey decodes to 0x026021e0c3665b2a via parseCommunityId
 echo "Test 3: join community by /cc link"
 ask "Присоединись к Status-каналу https://status.app/cc/G5kAAtest#zQ3e2eCcKey. Используй status_community join."
-assert_in_store "zQ3e2eCcKey" "parsed /cc community key persisted"
+assert_in_store "0x026021e0c3665b2a" "parsed /cc community key persisted (decoded to hex)"
 
 # ---------- Test 4: leave ----------
 echo "Test 4: leave community"
