@@ -4,24 +4,25 @@
  * Used by gateway.startAccount to ensure status-backend is running:
  *   1. Health check — already running?
  *   2. Find binary — PATH, ~/.openclaw/bin/, common locations
- *   3. Build from source — clone status-go, install Go if needed
+ *   3. Download prebuilt binary from GitHub Release
  *   4. Start and wait for healthy
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { StatusClient } from "./status-client.js";
 
 // ---------------------------------------------------------------------------
-// Paths
+// Paths & URLs
 // ---------------------------------------------------------------------------
 
 const OPENCLAW_BIN = resolve(homedir(), ".openclaw", "bin");
 const STATUS_BACKEND_BIN = resolve(OPENCLAW_BIN, "status-backend");
-const STATUS_GO_REPO = "https://github.com/status-im/status-go.git";
-const STATUS_GO_DIR = resolve(homedir(), ".openclaw", "src", "status-go");
+
+const RELEASE_TAG = "status-backend-v0.1.0";
+const RELEASE_REPO = "epavlenko/openclaw-status";
 
 // ---------------------------------------------------------------------------
 // Find existing binary
@@ -29,7 +30,7 @@ const STATUS_GO_DIR = resolve(homedir(), ".openclaw", "src", "status-go");
 
 /** Search common locations for an existing status-backend binary. */
 export function findBackendBinary(): string | null {
-  // Explicit location from previous builds
+  // Explicit location from previous downloads/builds
   if (existsSync(STATUS_BACKEND_BIN)) return STATUS_BACKEND_BIN;
 
   // Check PATH
@@ -56,86 +57,46 @@ export function findBackendBinary(): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Go toolchain
-// ---------------------------------------------------------------------------
-
-/** Ensure Go toolchain is available, returns `go` binary path. */
-export function ensureGo(): string | null {
-  try {
-    const found = execSync("which go", { stdio: "pipe" }).toString().trim();
-    if (found) return found;
-  } catch {
-    // not on PATH
-  }
-
-  const localGo = resolve(homedir(), ".openclaw", "go", "bin", "go");
-  if (existsSync(localGo)) return localGo;
-
-  // Download portable Go
-  const arch = process.arch === "arm64" ? "arm64" : "amd64";
-  const platform = process.platform === "darwin" ? "darwin" : "linux";
-  const goVersion = "1.23.6";
-  const tarball = `go${goVersion}.${platform}-${arch}.tar.gz`;
-  const url = `https://go.dev/dl/${tarball}`;
-
-  try {
-    mkdirSync(resolve(homedir(), ".openclaw"), { recursive: true });
-    execSync(
-      `curl -fsSL "${url}" | tar -xz -C "${resolve(homedir(), ".openclaw")}"`,
-      { stdio: "pipe", timeout: 120_000 },
-    );
-    if (existsSync(localGo)) return localGo;
-  } catch {
-    // download failed
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Build from source
+// Download prebuilt binary
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the status-backend binary exists.
- * Search → build from source (installing Go if needed).
+ * Download prebuilt status-backend from GitHub Release.
+ * Extracts status-backend + libsds.so to ~/.openclaw/bin/.
  */
-export function ensureBackendBinary(): { path: string } | { error: string } {
+export function downloadBackendBinary(): { path: string } | { error: string } {
   const existing = findBackendBinary();
   if (existing) return { path: existing };
 
-  const goBin = ensureGo();
-  if (!goBin) {
-    return { error: "Could not find or install Go toolchain. Install Go (https://go.dev/dl/) and retry." };
-  }
-
-  try {
-    if (!existsSync(resolve(STATUS_GO_DIR, ".git"))) {
-      mkdirSync(dirname(STATUS_GO_DIR), { recursive: true });
-      execSync(
-        `git clone --depth 1 ${STATUS_GO_REPO} "${STATUS_GO_DIR}"`,
-        { stdio: "pipe", timeout: 120_000 },
-      );
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { error: `Failed to clone status-go: ${msg}` };
-  }
-
   try {
     mkdirSync(OPENCLAW_BIN, { recursive: true });
-    const env = { ...process.env, GOBIN: OPENCLAW_BIN };
+
+    const arch = process.arch === "arm64" ? "arm64" : "amd64";
+    const platform = process.platform === "darwin" ? "darwin" : "linux";
+    const pattern = `status-backend-${platform}-${arch}.tar.gz`;
+
+    console.log(`[status] Downloading status-backend (${RELEASE_TAG}, ${pattern})...`);
     execSync(
-      `"${goBin}" build -o "${STATUS_BACKEND_BIN}" ./cmd/status-backend`,
-      { cwd: STATUS_GO_DIR, stdio: "pipe", timeout: 300_000, env },
+      `gh release download "${RELEASE_TAG}" --repo "${RELEASE_REPO}" --pattern "${pattern}" --dir /tmp --clobber` +
+      ` && tar xzf "/tmp/${pattern}" -C "${OPENCLAW_BIN}" && rm -f "/tmp/${pattern}"`,
+      { stdio: "pipe", timeout: 120_000 },
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { error: `Failed to build status-backend: ${msg}` };
+    return {
+      error:
+        `Failed to download status-backend: ${msg}\n` +
+        "Ensure GitHub CLI (gh) is installed and authenticated.\n" +
+        "Or manually set the path:\n" +
+        '  openclaw config set plugins.entries.openclaw-status.config.backendBinary "/path/to/status-backend"',
+    };
   }
 
-  if (existsSync(STATUS_BACKEND_BIN)) return { path: STATUS_BACKEND_BIN };
-  return { error: "Build completed but binary not found." };
+  if (existsSync(STATUS_BACKEND_BIN)) {
+    console.log(`[status] Downloaded status-backend to ${STATUS_BACKEND_BIN}`);
+    return { path: STATUS_BACKEND_BIN };
+  }
+  return { error: "Download completed but binary not found in archive." };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +124,7 @@ export async function waitForHealthy(
 
 /**
  * Start status-backend as a detached background process.
- * Returns the ChildProcess handle on success, or null if the binary doesn't exist.
+ * Sets LD_LIBRARY_PATH so libsds.so is found next to the binary.
  */
 export function startBackendProcess(
   binaryPath: string,
@@ -172,9 +133,17 @@ export function startBackendProcess(
   const abs = resolve(binaryPath);
   if (!existsSync(abs)) return null;
 
-  const child = spawn(abs, ["--port", String(port)], {
+  const binDir = resolve(abs, "..");
+  const env = {
+    ...process.env,
+    LD_LIBRARY_PATH: `${binDir}:${process.env.LD_LIBRARY_PATH ?? ""}`,
+    DYLD_LIBRARY_PATH: `${binDir}:${process.env.DYLD_LIBRARY_PATH ?? ""}`,
+  };
+
+  const child = spawn(abs, ["--address", `127.0.0.1:${port}`], {
     detached: true,
     stdio: "ignore",
+    env,
   });
   child.unref();
   return child;
@@ -190,7 +159,7 @@ export function startBackendProcess(
  *   1. Already running? → done
  *   2. Explicit binaryPath? → use it
  *   3. Find on PATH / common locations
- *   4. Not found → build from source (install Go if needed, clone status-go)
+ *   4. Not found → download prebuilt from GitHub Release
  *   5. Start and wait for healthy
  */
 export async function ensureBackend(
@@ -206,7 +175,7 @@ export async function ensureBackend(
     // not running
   }
 
-  // 2–3. Resolve binary (lightweight — no build)
+  // 2–4. Resolve binary
   let resolvedBinary: string | undefined;
 
   if (binaryPath?.trim()) {
@@ -220,14 +189,11 @@ export async function ensureBackend(
     if (found) {
       resolvedBinary = found;
     } else {
-      // Build from source (downloads Go if needed, clones status-go, builds)
-      console.log("[status] status-backend not found, building from source...");
-      const buildResult = ensureBackendBinary();
-      if ("error" in buildResult) {
-        return { ok: false, started: false, error: buildResult.error };
+      const dlResult = downloadBackendBinary();
+      if ("error" in dlResult) {
+        return { ok: false, started: false, error: dlResult.error };
       }
-      resolvedBinary = buildResult.path;
-      console.log(`[status] Built status-backend: ${resolvedBinary}`);
+      resolvedBinary = dlResult.path;
     }
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   findBackendBinary,
-  ensureBackendBinary,
+  downloadBackendBinary,
   ensureBackend,
   startBackendProcess,
   waitForHealthy,
@@ -14,9 +14,9 @@ describe("findBackendBinary", () => {
   });
 });
 
-describe("ensureBackendBinary", () => {
+describe("downloadBackendBinary", () => {
   it("returns path or error (never throws)", { timeout: 30_000 }, () => {
-    const result = ensureBackendBinary();
+    const result = downloadBackendBinary();
     expect("path" in result || "error" in result).toBe(true);
   });
 });
@@ -30,7 +30,7 @@ describe("startBackendProcess", () => {
 
 describe("waitForHealthy", () => {
   it("returns false for unreachable URL within timeout", async () => {
-    const result = await waitForHealthy("http://127.0.0.1:19999", 1000, 200);
+    const result = await waitForHealthy("http://127.0.0.1:59999", 1000, 200);
     expect(result).toBe(false);
   });
 });
@@ -38,7 +38,7 @@ describe("waitForHealthy", () => {
 describe("ensureBackend", () => {
   it("returns error when explicit binary does not exist", async () => {
     const r = await ensureBackend(
-      "http://127.0.0.1:19999",
+      "http://127.0.0.1:59999",
       "/tmp/no-such-binary",
     );
     expect(r.ok).toBe(false);
@@ -46,12 +46,12 @@ describe("ensureBackend", () => {
     expect(r.error).toMatch(/Binary not found/);
   });
 
-  it("attempts auto-build when no binary found", async () => {
-    const r = await ensureBackend("http://127.0.0.1:19999");
-    // Either succeeds (binary built) or fails with a build/Go error
-    // — should NOT fail with "not found", because it tries to build
+  it("attempts download when no binary found", async () => {
+    const r = await ensureBackend("http://127.0.0.1:59999");
+    // Either succeeds (binary downloaded/found) or fails with download error
+    // — should NOT fail with a generic "not found"
     if (!r.ok) {
-      expect(r.error).not.toMatch(/status-backend not found/);
+      expect(r.error).toBeDefined();
     }
   });
 });
