@@ -172,6 +172,51 @@ Config is read from `plugins.entries.openclaw-status.config` (primary) with fall
 - **Waku P2P between two nodes on same machine** — community membership operations may not deliver. Run bot on a separate host for testing.
 - **Account = ECDSA keypair** from BIP39 mnemonic. Store `keyUID` in config for re-login.
 
+## Testing Checklist
+
+**After any code change, run `npm run test:smoke` before considering it done.** This is the single gate between "code written" and "actually works".
+
+### What `test:smoke` does
+1. `tsc` build — catches type errors
+2. `vitest run` — 67 unit tests (mocked, fast)
+3. Restart `openclaw-gateway` — verify service comes back up
+4. Wait for `status-backend` health check
+5. E2E tests via `openclaw agent` — real tool calls through the full stack
+6. Post-E2E verification — gateway still alive? Backend healthy? Log errors?
+
+### When to run which test
+
+| Changed file | Run |
+|---|---|
+| `src/channel.ts` (gateway/join logic) | `npm run test:smoke` — race conditions only show up in E2E |
+| `src/community-tool.ts` | `npm test` usually enough, `test:smoke` if touching join/leave flow |
+| `src/status-client.ts` (RPC calls) | `npm run test:smoke` — RPC issues only show up against real backend |
+| `src/setup.ts` (provisioning) | `npm test` + manually verify `systemctl --user restart openclaw-gateway` |
+| `src/config.ts`, `src/community-store.ts` | `npm test` is enough |
+| `test/*` | `npm run test:smoke` to verify tests themselves work |
+
+### Known failure patterns
+
+These are real bugs that burned us before. Check for them after changes:
+
+1. **RPC not ready after startMessenger** — `joinCommunity` called before `wakuext` handlers registered. Symptoms: "does not exist" error, empty response. Guard: `waitForNodeReady()` + 10s delay + retry.
+
+2. **LoginAccount on running node** — calling `LoginAccount` when already logged in crashes status-backend. Guard: check `settings_getSettings` first.
+
+3. **startMessenger blocks all RPC** — it's a blocking call. Must be fire-and-forget (`void client.startMessenger()`), otherwise gateway hangs.
+
+4. **Gateway crash loop on restart** — if `startAccount()` throws synchronously, systemd restart loop hits rapidly. Guard: async errors must be caught.
+
+5. **Multibase keys not decoded** — `status.app` URLs contain base58btc community keys. Must be decoded to hex before any RPC call or store operation. Test with both hex and link inputs.
+
+6. **Port 61777 flakiness in unit tests** — `setup.test.ts` assumes port 61777 is free. E2E runs can spawn stray `status-backend` processes. Smoke test cleans these up.
+
+### Manual checks (when smoke test isn't enough)
+
+- **First launch**: Delete `~/.openclaw/data/openclaw-status/`, restart gateway, watch for ~10 min `startMessenger` completion
+- **Community join**: Join a real community, verify messages appear in agent conversation
+- **Cross-machine**: Waku P2P between two nodes on same machine may not deliver — test on separate hosts
+
 ## Related Projects
 
 - `status-app-agent` — original Python bot (reference implementation for status-backend integration patterns)

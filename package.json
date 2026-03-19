@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "bash test/e2e-tool.sh",
+    "test:smoke": "bash test/smoke.sh",
     "lint": "tsc --noEmit"
   },
   "keywords": [
