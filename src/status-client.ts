@@ -97,8 +97,27 @@ export class StatusClient {
     return (r.result as Community[]) ?? [];
   }
 
+  async fetchCommunity(communityKey: string): Promise<RpcResponse> {
+    return this.callRpc("wakuext_fetchCommunity", [{
+      communityKey,
+      waitForResponse: true,
+    }]);
+  }
+
+  async getAccounts(): Promise<Array<{ wallet?: boolean; address: string }>> {
+    const r = await this.callRpc("accounts_getAccounts");
+    return (r.result as Array<{ wallet?: boolean; address: string }>) ?? [];
+  }
+
   async joinCommunity(communityId: string): Promise<RpcResponse> {
-    return this.callRpc("wakuext_requestToJoinCommunity", [{ communityId }]);
+    // Get wallet address (required for requestToJoinCommunity)
+    const accounts = await this.getAccounts();
+    const walletAddr = accounts.find((a) => a.wallet)?.address ?? "";
+
+    return this.callRpc("wakuext_requestToJoinCommunity", [{
+      communityId,
+      ...(walletAddr ? { addressesToReveal: [walletAddr], airdropAddress: walletAddr } : {}),
+    }]);
   }
 
   async sendChatMessage(chatId: string, text: string): Promise<RpcResponse> {

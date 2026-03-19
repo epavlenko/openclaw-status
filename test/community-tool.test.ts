@@ -73,22 +73,23 @@ describe("status_community tool", () => {
       expect(store.communityIds).toContain("0x04abc123");
     });
 
-    it("parses status.app link before persisting", async () => {
+    it("parses status.app link and decodes multibase to hex", async () => {
       const tool = buildCommunityTool(makeConfig(dataDir));
       const result = parseToolResult(
         await tool.execute("test-2", {
           action: "join",
-          communityId: "https://status.app/c#zQ3shrjJaMaxPCL4",
+          communityId: "https://status.app/c#zQ3shrjJaMaxPCL4FUeqCn96s3mUr1YhtYD17XxqerBhJTs57",
         }),
       );
 
+      const expectedHex = "0x03b3a11795c41bb46d7a33c1e21726327f80188c19ec1adbc06f00ac80ed06eb16";
       expect(result).toMatchObject({
-        communityId: "zQ3shrjJaMaxPCL4",
+        communityId: expectedHex,
         persisted: true,
       });
 
       const store = await loadCommunityStore(dataDir);
-      expect(store.communityIds).toContain("zQ3shrjJaMaxPCL4");
+      expect(store.communityIds).toContain(expectedHex);
     });
 
     it("parses status.app/cc link (community channel)", async () => {
@@ -102,7 +103,7 @@ describe("status_community tool", () => {
       );
 
       expect(result).toMatchObject({
-        communityId: "zQ3shrjJaMaxPCL4FUeqCn96s3mUr1YhtYD17XxqerBhJTs57",
+        communityId: "0x03b3a11795c41bb46d7a33c1e21726327f80188c19ec1adbc06f00ac80ed06eb16",
         persisted: true,
       });
     });
@@ -291,24 +292,25 @@ describe("status_community tool", () => {
 
     it("join via link → leave via parsed ID", async () => {
       const tool = buildCommunityTool(makeConfig(dataDir));
+      const expectedHex = "0x03b3a11795c41bb46d7a33c1e21726327f80188c19ec1adbc06f00ac80ed06eb16";
 
       await tool.execute("flow-6", {
         action: "join",
-        communityId: "https://status.app/c#zQ3testKey",
+        communityId: "https://status.app/c#zQ3shrjJaMaxPCL4FUeqCn96s3mUr1YhtYD17XxqerBhJTs57",
       });
 
       let result = parseToolResult(
         await tool.execute("flow-7", { action: "list" }),
       ) as Record<string, unknown>;
-      expect(result.savedCommunityIds).toContain("zQ3testKey");
+      expect(result.savedCommunityIds).toContain(expectedHex);
 
-      // Leave using parsed ID directly
-      await tool.execute("flow-8", { action: "leave", communityId: "zQ3testKey" });
+      // Leave using the same link (will be decoded to same hex)
+      await tool.execute("flow-8", { action: "leave", communityId: expectedHex });
 
       result = parseToolResult(
         await tool.execute("flow-9", { action: "list" }),
       ) as Record<string, unknown>;
-      expect(result.savedCommunityIds).not.toContain("zQ3testKey");
+      expect(result.savedCommunityIds).not.toContain(expectedHex);
     });
   });
 

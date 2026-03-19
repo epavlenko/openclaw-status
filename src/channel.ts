@@ -20,15 +20,54 @@ import { loadCommunityStore } from "./community-store.js";
 // Community join helper
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Multibase / community key decoding
+// ---------------------------------------------------------------------------
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** Decode a base58btc string to hex (without the `z` multibase prefix). */
+function base58ToHex(b58: string): string {
+  let num = BigInt(0);
+  for (const c of b58) {
+    const idx = BASE58_ALPHABET.indexOf(c);
+    if (idx < 0) throw new Error(`Invalid base58 character: ${c}`);
+    num = num * 58n + BigInt(idx);
+  }
+  let hex = num.toString(16);
+  if (hex.length % 2) hex = "0" + hex;
+  // Preserve leading zeros
+  for (const c of b58) {
+    if (c !== "1") break;
+    hex = "00" + hex;
+  }
+  return hex;
+}
+
 /**
- * Parse a community identifier — accepts raw hex ID or a Status invite link.
+ * Decode a multibase community key (zQ3...) to a compressed public key hex.
  *
- * Status invite links have the format:
- *   https://status.app/c/<base64url-encoded-data>#<community-key>
- *   https://status.app/c#/<community-key>
+ * Format: z (base58btc) + varint multicodec (e7 01 = secp256k1-pub) + 33-byte compressed pubkey.
+ * Returns the compressed pubkey as `0x03...` (33 bytes).
+ */
+export function decodeMultibaseCommunityKey(key: string): string {
+  if (key.startsWith("0x")) return key;
+  if (!key.startsWith("z")) return key; // Not multibase, return as-is
+
+  const hex = base58ToHex(key.slice(1)); // strip 'z' prefix
+  // Skip varint multicodec prefix (e7 01 for secp256k1-pub = 2 bytes)
+  // The remaining 33 bytes are the compressed public key
+  if (hex.startsWith("e701") && hex.length >= 4 + 66) {
+    return "0x" + hex.slice(4);
+  }
+  // Fallback: return full decoded hex
+  return "0x" + hex;
+}
+
+/**
+ * Parse a community identifier — accepts raw hex ID, multibase key, or Status invite link.
  *
- * The community key after `#` (or `#/`) is used as the community ID.
- * If the input starts with `0x`, it is treated as a raw hex community ID.
+ * Returns a hex community ID (0x...) suitable for status-backend RPC.
  */
 export function parseCommunityId(input: string): string {
   const trimmed = input.trim();
@@ -37,17 +76,19 @@ export function parseCommunityId(input: string): string {
   if (trimmed.startsWith("0x")) return trimmed;
 
   // Status invite link — extract community key from fragment
+  let key = trimmed;
   try {
     const url = new URL(trimmed);
     if (url.hash) {
-      const key = url.hash.replace(/^#\/?/, "");
-      if (key.length > 0) return key;
+      const extracted = url.hash.replace(/^#\/?/, "");
+      if (extracted.length > 0) key = extracted;
     }
   } catch {
     // Not a URL — use as-is
   }
 
-  return trimmed;
+  // Decode multibase key (zQ3...) to hex
+  return decodeMultibaseCommunityKey(key);
 }
 
 async function joinCommunityIfNeeded(
@@ -55,19 +96,32 @@ async function joinCommunityIfNeeded(
   rawCommunityId: string,
 ): Promise<void> {
   const communityId = parseCommunityId(rawCommunityId);
+  const short = communityId.slice(0, 16);
 
   // Check if already joined
   const joined = await client.joinedCommunities();
   const alreadyJoined = joined.some((c) => c.id === communityId);
 
   if (alreadyJoined) {
-    console.log(`[status] Already a member of community ${communityId.slice(0, 16)}...`);
+    console.log(`[status] Already a member of community ${short}...`);
     return;
   }
 
-  console.log(`[status] Requesting to join community ${communityId.slice(0, 16)}...`);
-  await client.joinCommunity(communityId);
-  console.log(`[status] Join request sent for community ${communityId.slice(0, 16)}...`);
+  // Fetch community description from Waku network first
+  console.log(`[status] Fetching community ${short}...`);
+  try {
+    await client.fetchCommunity(communityId);
+  } catch (err) {
+    console.warn(`[status] fetchCommunity failed (may still work): ${err}`);
+  }
+
+  console.log(`[status] Requesting to join community ${short}...`);
+  const result = await client.joinCommunity(communityId);
+  if (result.error) {
+    console.error(`[status] Join failed: ${result.error.message}`);
+  } else {
+    console.log(`[status] Join request sent for community ${short}...`);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { statusPlugin, parseCommunityId } from "../src/channel.js";
+import { statusPlugin, parseCommunityId, decodeMultibaseCommunityKey } from "../src/channel.js";
 
 describe("statusPlugin contract", () => {
   it("has required id", () => {
@@ -40,6 +40,24 @@ describe("statusPlugin contract", () => {
     expect((statusPlugin as Record<string, unknown>)["setup"]).toBeUndefined();
   });
 
+  describe("decodeMultibaseCommunityKey", () => {
+    it("returns hex ID as-is", () => {
+      expect(decodeMultibaseCommunityKey("0x04abc123")).toBe("0x04abc123");
+    });
+
+    it("decodes zQ3 multibase key to hex compressed pubkey", () => {
+      const key = "zQ3shrjJaMaxPCL4FUeqCn96s3mUr1YhtYD17XxqerBhJTs57";
+      const hex = decodeMultibaseCommunityKey(key);
+      expect(hex).toMatch(/^0x03[0-9a-f]{64}$/);
+      expect(hex).toBe("0x03b3a11795c41bb46d7a33c1e21726327f80188c19ec1adbc06f00ac80ed06eb16");
+    });
+
+    it("returns non-multibase string with 0x prefix", () => {
+      const result = decodeMultibaseCommunityKey("plainKey");
+      expect(result).toBe("plainKey");
+    });
+  });
+
   describe("parseCommunityId", () => {
     it("returns raw hex ID as-is", () => {
       expect(parseCommunityId("0x04abc123")).toBe("0x04abc123");
@@ -49,12 +67,14 @@ describe("statusPlugin contract", () => {
       expect(parseCommunityId("  0x04abc123  ")).toBe("0x04abc123");
     });
 
-    it("extracts community key from status.app link with hash fragment", () => {
-      expect(parseCommunityId("https://status.app/c#zQ3abc123")).toBe("zQ3abc123");
+    it("decodes multibase key from status.app link", () => {
+      const result = parseCommunityId("https://status.app/c#zQ3shrjJaMaxPCL4FUeqCn96s3mUr1YhtYD17XxqerBhJTs57");
+      expect(result).toBe("0x03b3a11795c41bb46d7a33c1e21726327f80188c19ec1adbc06f00ac80ed06eb16");
     });
 
-    it("extracts community key from status.app link with #/ fragment", () => {
-      expect(parseCommunityId("https://status.app/c#/zQ3abc123")).toBe("zQ3abc123");
+    it("decodes multibase key from status.app/cc link", () => {
+      const result = parseCommunityId("https://status.app/cc/G5kAAtest#zQ3shrjJaMaxPCL4FUeqCn96s3mUr1YhtYD17XxqerBhJTs57");
+      expect(result).toBe("0x03b3a11795c41bb46d7a33c1e21726327f80188c19ec1adbc06f00ac80ed06eb16");
     });
 
     it("returns non-URL non-hex string as-is", () => {
