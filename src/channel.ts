@@ -5,7 +5,10 @@
  * outbound (sendText), and config adapter.
  */
 
-import { StatusClient } from "./status-client.js";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { StatusClient, StatusBackendError } from "./status-client.js";
 import {
   listStatusAccountIds,
   resolveStatusAccount,
@@ -15,6 +18,37 @@ import {
 import { getStatusRuntime } from "./runtime.js";
 import { ensureBackend } from "./setup.js";
 import { loadCommunityStore } from "./community-store.js";
+
+// ---------------------------------------------------------------------------
+// keyUID persistence helpers
+// ---------------------------------------------------------------------------
+
+function resolveDir(dataDir: string): string {
+  if (dataDir.startsWith("~")) {
+    return join(homedir(), dataDir.slice(1));
+  }
+  return dataDir;
+}
+
+interface AccountFile {
+  keyUID: string;
+}
+
+async function loadSavedKeyUID(dataDir: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(resolveDir(dataDir), "account.json"), "utf-8");
+    const data = JSON.parse(raw) as Partial<AccountFile>;
+    return data.keyUID || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveKeyUID(dataDir: string, keyUID: string): Promise<void> {
+  const dir = resolveDir(dataDir);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "account.json"), JSON.stringify({ keyUID }, null, 2) + "\n", "utf-8");
+}
 
 // ---------------------------------------------------------------------------
 // Community join helper
@@ -98,14 +132,8 @@ async function waitForNodeReady(
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      // joinedCommunities is a good canary — it uses wakuext namespace
-      // which is only available after messenger is fully initialized
-      await client.joinedCommunities();
-      return true;
-    } catch {
-      await new Promise((r) => setTimeout(r, 2000));
-    }
+    if (await client.isRpcReady()) return true;
+    await new Promise((r) => setTimeout(r, 2000));
   }
   return false;
 }
@@ -273,13 +301,91 @@ export const statusPlugin = {
 
       const client = new StatusClient({ baseUrl: account.backendUrl });
 
-      // Initialize and login (skip if already logged in on a running node)
+      // node.login signal result — resolved with true (success) or false (error)
+      let loginSignalResolve: (success: boolean) => void;
+      let loginSignalPromise = new Promise<boolean>((r) => { loginSignalResolve = r; });
+      const resetLoginSignal = () => {
+        loginSignalPromise = new Promise<boolean>((r) => { loginSignalResolve = r; });
+      };
+
+      // Start signal listener BEFORE login (like Python bot.py:44)
+      // so we catch the node.login signal
+      void client.listenSignals(async (type, event) => {
+        if (type === "node.login") {
+          const error = (event?.["error"] as string) ?? "";
+          if (error && error.includes("already running")) {
+            console.log(`[status] Node already running (signal), proceeding`);
+            loginSignalResolve(true);
+          } else if (error) {
+            console.error(`[status] Login failed (signal): ${error}`);
+            loginSignalResolve(false);
+          } else {
+            console.log(`[status] Login successful (signal)`);
+            loginSignalResolve(true);
+          }
+          return;
+        }
+
+        if (type !== "messages.new") return;
+
+        const messages = (event?.["messages"] as Array<{
+          id: string;
+          chatId: string;
+          text: string;
+          from: string;
+          timestamp: number;
+          contentType: number;
+        }>) ?? [];
+
+        for (const msg of messages) {
+          if (msg.contentType !== 1) continue;
+
+          try {
+            await runtime.channel?.reply?.handleInboundMessage?.({
+              channel: "status",
+              accountId,
+              senderId: msg.from,
+              chatType: "group",
+              chatId: msg.chatId,
+              text: msg.text,
+              messageId: msg.id,
+              timestamp: msg.timestamp,
+            });
+          } catch (err) {
+            console.error("[status] Failed to handle inbound message:", err);
+          }
+        }
+
+        setStatus({ lastInboundAt: Date.now() });
+      });
+
+      // Helper: attempt login and wait for signal result (30s timeout)
+      const tryLogin = async (keyUID: string, label: string): Promise<boolean> => {
+        resetLoginSignal();
+        console.log(`[status] ${label} (${keyUID.slice(0, 20)}...)`);
+        try {
+          await client.login(keyUID, account.password);
+        } catch (err) {
+          if (err instanceof StatusBackendError && err.message.includes("already running")) {
+            console.log(`[status] Node already running, treating as success`);
+            return true;
+          }
+          console.warn(`[status] Login HTTP error: ${err instanceof Error ? err.message : err}`);
+          return false;
+        }
+        // Wait for node.login signal to know if login actually succeeded
+        const timeout = new Promise<boolean>((r) => setTimeout(() => r(false), 30_000));
+        const success = await Promise.race([loginSignalPromise, timeout]);
+        return success;
+      };
+
+      // Initialize and login
       try {
         // Check if already logged in — LoginAccount on running node causes crash
         let alreadyLoggedIn = false;
         try {
           const settings = await client.getSettings();
-          if (settings && Object.keys(settings).length > 0) {
+          if (settings?.["public-key"]) {
             alreadyLoggedIn = true;
             console.log(`[status] Backend already logged in, skipping initialize/login`);
           }
@@ -288,37 +394,68 @@ export const statusPlugin = {
         }
 
         if (!alreadyLoggedIn) {
-          await client.initialize(account.dataDir);
+          // Initialize and get existing accounts
+          const initResult = await client.initialize(account.dataDir);
+          const existingAccounts = (initResult?.["accounts"] as Array<{ "key-uid": string; name?: string }>) ?? [];
 
-          if (account.keyUID) {
-            await client.login(account.keyUID, account.password);
-          } else {
-            await client.createAccount(
+          // Determine effective keyUID: config → saved
+          const savedKeyUID = await loadSavedKeyUID(account.dataDir);
+          const effectiveKeyUID = account.keyUID || savedKeyUID;
+
+          let loggedIn = false;
+
+          // Strategy 1: login with config/saved keyUID
+          if (effectiveKeyUID) {
+            loggedIn = await tryLogin(effectiveKeyUID, "Logging in with keyUID");
+          }
+
+          // Strategy 2: login with first existing account from initialize()
+          if (!loggedIn && existingAccounts.length > 0) {
+            const first = existingAccounts[0];
+            const fallbackUID = first["key-uid"];
+            loggedIn = await tryLogin(fallbackUID, `Falling back to account "${first.name ?? "?"}"`);
+            if (loggedIn) {
+              await saveKeyUID(account.dataDir, fallbackUID);
+            }
+          }
+
+          // Strategy 3: create new account
+          if (!loggedIn) {
+            console.log(`[status] Creating new account: ${account.displayName}`);
+            resetLoginSignal();
+            const createResult = await client.createAccount(
               account.displayName,
               account.password,
               account.dataDir,
             );
+            const newKeyUID = (createResult?.["keyUID"] as string) ?? "";
+            if (newKeyUID) {
+              await saveKeyUID(account.dataDir, newKeyUID);
+            }
+            // Wait for node.login signal after createAccount
+            const timeout = new Promise<boolean>((r) => setTimeout(() => r(false), 30_000));
+            const success = await Promise.race([loginSignalPromise, timeout]);
+            if (!success) {
+              console.warn(`[status] Timed out waiting for node.login after createAccount`);
+            }
+          } else if (effectiveKeyUID && !savedKeyUID) {
+            await saveKeyUID(account.dataDir, effectiveKeyUID);
           }
+
+          // startMessenger blocks for ~10 min on first launch (Waku peer discovery).
+          // Fire-and-forget — don't await.
+          console.log(`[status] Starting messenger (may take ~10 min on first launch)...`);
+          void client.startMessenger().then(
+            () => console.log(`[status] Messenger started`),
+            (err) => console.error(`[status] startMessenger error:`, err),
+          );
         }
 
-        // startMessenger blocks for ~10 min on first launch (Waku peer discovery).
-        // Fire-and-forget — don't await. All subsequent RPC calls queue behind it
-        // and execute once messenger is ready.
-        console.log(`[status] Starting messenger (may take ~10 min on first launch)...`);
-        void client.startMessenger().then(
-          () => console.log(`[status] Messenger started`),
-          (err) => console.error(`[status] startMessenger error:`, err),
-        );
-
         setStatus({ connected: true, running: true, lastConnectedAt: Date.now() });
-        console.log(`[status] Account ${accountId} connected (messenger starting in background)`);
+        console.log(`[status] Account ${accountId} connected`);
 
-        // Auto-join communities after node is ready.
-        // Wait for node.ready signal before attempting joins — RPC handlers crash
-        // if called too early after startMessenger.
+        // Auto-join communities after node is ready
         void (async () => {
-          // Wait for node to be fully ready before joining.
-          // RPC handlers crash if called too early after startMessenger.
           console.log(`[status] Waiting for node to be ready before joining communities...`);
           await new Promise((r) => setTimeout(r, 10_000));
           const ready = await waitForNodeReady(client, 60_000);
@@ -344,45 +481,6 @@ export const statusPlugin = {
         console.error(`[status] Account ${accountId} failed to start:`, msg);
         throw err;
       }
-
-      // Listen for incoming messages via WebSocket signals
-      void client.listenSignals(async (type, event) => {
-        if (type !== "messages.new") return;
-
-        const messages = (event?.["messages"] as Array<{
-          id: string;
-          chatId: string;
-          text: string;
-          from: string;
-          timestamp: number;
-          contentType: number;
-        }>) ?? [];
-
-        for (const msg of messages) {
-          // Skip non-text messages
-          if (msg.contentType !== 1) continue;
-          // Skip own messages (from this account)
-          // We can't easily check this without knowing our own pubkey,
-          // but status-backend typically doesn't echo own messages in signals.
-
-          try {
-            await runtime.channel?.reply?.handleInboundMessage?.({
-              channel: "status",
-              accountId,
-              senderId: msg.from,
-              chatType: "group",
-              chatId: msg.chatId,
-              text: msg.text,
-              messageId: msg.id,
-              timestamp: msg.timestamp,
-            });
-          } catch (err) {
-            console.error("[status] Failed to handle inbound message:", err);
-          }
-        }
-
-        setStatus({ lastInboundAt: Date.now() });
-      });
 
       activeClients.set(accountId, { client, abortController });
 

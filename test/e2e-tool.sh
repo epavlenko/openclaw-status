@@ -123,6 +123,31 @@ else
   exit 1
 fi
 
+# Wait for backend to be logged in (RPC ready)
+echo "  Waiting for backend login (public-key in settings)..."
+RPC_WAIT=0
+RPC_TIMEOUT=60
+RPC_READY=false
+while [ "$RPC_WAIT" -lt "$RPC_TIMEOUT" ]; do
+  PK=$(curl -sf -X POST "${BACKEND_URL}/statusgo/CallRPC" \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"settings_getSettings","params":[]}' 2>/dev/null \
+    | jq -r '.result["public-key"] // empty' 2>/dev/null || true)
+  if [ -n "$PK" ]; then
+    RPC_READY=true
+    break
+  fi
+  sleep 2
+  RPC_WAIT=$((RPC_WAIT + 2))
+done
+
+if [ "$RPC_READY" = true ]; then
+  pass "backend logged in (public-key present)"
+else
+  fail "backend not logged in after ${RPC_TIMEOUT}s"
+  echo "  Backend may not have completed login. Continuing anyway..."
+fi
+
 mark_log_start
 echo ""
 

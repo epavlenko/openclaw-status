@@ -135,7 +135,41 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: E2E tests
+# Step 4: RPC readiness (backend logged in)
+# ---------------------------------------------------------------------------
+step "RPC readiness (backend logged in)"
+
+echo "  Waiting for backend login (public-key in settings)..."
+RPC_WAIT=0
+RPC_TIMEOUT=60
+RPC_READY=false
+while [ "$RPC_WAIT" -lt "$RPC_TIMEOUT" ]; do
+  PK=$(curl -sf -X POST "${BACKEND_URL}/statusgo/CallRPC" \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"settings_getSettings","params":[]}' 2>/dev/null \
+    | jq -r '.result["public-key"] // empty' 2>/dev/null || true)
+  if [ -n "$PK" ]; then
+    RPC_READY=true
+    break
+  fi
+  sleep 2
+  RPC_WAIT=$((RPC_WAIT + 2))
+done
+
+if [ "$RPC_READY" = true ]; then
+  echo "  OK: backend logged in (public-key present)"
+  pass
+else
+  echo "  FAIL: backend not logged in after ${RPC_TIMEOUT}s"
+  fail
+  echo ""
+  echo "Smoke test aborted — backend not logged in."
+  echo "Results: $PASS passed, $FAIL failed"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5: E2E tests
 # ---------------------------------------------------------------------------
 step "E2E tests"
 if bash "$SCRIPT_DIR/e2e-tool.sh" 2>&1; then
@@ -149,7 +183,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Post-E2E health + log check
+# Step 6: Post-E2E health + log check
 # ---------------------------------------------------------------------------
 step "Post-E2E health verification"
 

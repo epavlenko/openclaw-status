@@ -5,6 +5,13 @@
  * See AGENTS.md for startup sequence and gotchas.
  */
 
+export class StatusBackendError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StatusBackendError";
+  }
+}
+
 export interface StatusClientConfig {
   baseUrl: string;
 }
@@ -246,6 +253,21 @@ export class StatusClient {
     await connect();
   }
 
+  /**
+   * Check if RPC handlers are registered and responding.
+   * Calls wakuext_joinedCommunities and checks for "does not exist" error
+   * which indicates the wakuext namespace isn't registered yet.
+   */
+  async isRpcReady(): Promise<boolean> {
+    try {
+      const r = await this.callRpc("wakuext_joinedCommunities");
+      if (r.error?.message?.includes("does not exist")) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // --- Helpers ---
 
   private async post(path: string, body: unknown): Promise<Record<string, unknown>> {
@@ -254,6 +276,16 @@ export class StatusClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json() as Promise<Record<string, unknown>>;
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new StatusBackendError(`HTTP ${r.status}: ${text}`);
+    }
+    const json = await r.json() as Record<string, unknown>;
+    // status-backend HTTP API errors are strings (e.g. "account does not exist")
+    // JSON-RPC errors are objects with {code, message} — don't throw on those
+    if (typeof json.error === "string" && json.error.length > 0) {
+      throw new StatusBackendError(json.error);
+    }
+    return json;
   }
 }
