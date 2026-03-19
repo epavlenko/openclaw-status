@@ -162,6 +162,22 @@ Config is read from `plugins.entries.openclaw-status.config` (primary) with fall
 6. Wait for startMessenger to complete (~10 min on first launch)
 7. Only then: other RPC calls work
 
+## Community Join Sequence
+
+**Critical — must follow this order:**
+
+1. `wakuext_fetchCommunity` — get community description from network
+2. `wakuext_spectateCommunity` — **subscribes to Waku pubsub topics** (required!)
+3. `wakuext_requestToJoinCommunity` — sends join request to control node with `addressesToReveal`
+4. Wait for community owner to accept (open communities: auto-accept via Waku)
+5. `isMember` becomes `true` → can post messages
+
+**Never use `wakuext_joinCommunity`** — it's LOCAL-ONLY, sets `joined: true` but never contacts the control node. `isMember` stays `false`, `canPost` stays `false`.
+
+**`joined` vs `isMember`:** `joined` = local flag ("I want to be here"). `isMember` = network flag ("control node added me to members map"). Only `isMember: true` allows posting.
+
+**Spectate is mandatory:** Without `spectateCommunity`, the node isn't subscribed to the community's Waku topics. The join request gets sent but never delivered. 1:1 messages work without spectating, but community operations do not.
+
 ## Key Gotchas (from status-app-agent experience)
 
 - **`startMessenger` takes ~10 min** on first launch (Waku peer discovery). Must be called async, never block UI.
@@ -169,8 +185,11 @@ Config is read from `plugins.entries.openclaw-status.config` (primary) with fall
 - **RPC blocks during startMessenger** — all `CallRPC` calls queue behind it.
 - **JSON-RPC `id` is required** — omitting causes empty/error responses.
 - **`LoginAccount` on running node** — causes crash. Check `settings_getSettings` first; if it returns a public-key, skip login.
+- **`LoginAccount` is async** — HTTP response returns immediately with no error even on failure. Wait for `node.login` signal and check its `error` field.
 - **Waku P2P between two nodes on same machine** — community membership operations may not deliver. Run bot on a separate host for testing.
-- **Account = ECDSA keypair** from BIP39 mnemonic. Store `keyUID` in config for re-login.
+- **Account = ECDSA keypair** from BIP39 mnemonic. Store `keyUID` in `account.json` for re-login.
+- **`startAccount` must be long-lived** — gateway expects the promise to stay pending. Await `ctx.abortSignal` before returning, otherwise health monitor restart-loops.
+- **status-backend logs** — Go-side logs go to `~/.openclaw/data/openclaw-status/status-backend.log`. Internal geth/waku logs go to the data dir (literal path passed to `InitializeApplication`).
 
 ## Testing Checklist
 
@@ -199,17 +218,27 @@ Config is read from `plugins.entries.openclaw-status.config` (primary) with fall
 
 These are real bugs that burned us before. Check for them after changes:
 
-1. **RPC not ready after startMessenger** — `joinCommunity` called before `wakuext` handlers registered. Symptoms: "does not exist" error, empty response. Guard: `waitForNodeReady()` + 10s delay + retry.
+1. **RPC not ready after startMessenger** — RPC called before `wakuext` handlers registered. Symptoms: "does not exist" error. Guard: `waitForNodeReady()` via `isRpcReady()` + 10s delay + retry.
 
-2. **LoginAccount on running node** — calling `LoginAccount` when already logged in crashes status-backend. Guard: check `settings_getSettings` first.
+2. **LoginAccount on running node** — calling `LoginAccount` when already logged in crashes status-backend. Guard: check `settings_getSettings` for `public-key` first.
 
-3. **startMessenger blocks all RPC** — it's a blocking call. Must be fire-and-forget (`void client.startMessenger()`), otherwise gateway hangs.
+3. **LoginAccount is async** — HTTP response returns immediately with no error even on failure. The actual result comes via `node.login` signal. Guard: always wait for signal and check its `error` field.
 
-4. **Gateway crash loop on restart** — if `startAccount()` throws synchronously, systemd restart loop hits rapidly. Guard: async errors must be caught.
+4. **startMessenger blocks all RPC** — it's a blocking call. Must be fire-and-forget (`void client.startMessenger()`), otherwise gateway hangs.
 
-5. **Multibase keys not decoded** — `status.app` URLs contain base58btc community keys. Must be decoded to hex before any RPC call or store operation. Test with both hex and link inputs.
+5. **Gateway health monitor restart loop** — `startAccount()` must return a long-lived Promise. If it resolves, the gateway sets `running=false` and auto-restarts. Guard: await `ctx.abortSignal` before returning.
 
-6. **Port 61777 flakiness in unit tests** — `setup.test.ts` assumes port 61777 is free. E2E runs can spawn stray `status-backend` processes. Smoke test cleans these up.
+6. **`joinCommunity` is LOCAL-ONLY** — sets `joined: true` but never sends request to control node. `isMember` stays `false`, `canPost` stays `false`. Always use `requestToJoinCommunity` with `addressesToReveal`.
+
+7. **`spectateCommunity` required before join** — without spectating, the node isn't subscribed to community Waku topics and join requests are never delivered. Sequence: fetch → spectate → requestToJoin.
+
+8. **`joined: true` ≠ `isMember: true`** — `joined` is a local flag. `isMember` means the control node added you to the members map. Only check `isMember` to determine real membership.
+
+9. **Multibase keys not decoded** — `status.app` URLs contain base58btc community keys. Must be decoded to hex before any RPC call or store operation. Test with both hex and link inputs.
+
+10. **Port 61777 flakiness in unit tests** — `setup.test.ts` assumes port 61777 is free. E2E runs can spawn stray `status-backend` processes. Smoke test cleans these up.
+
+11. **keyUID persistence** — `account.json` in dataDir stores keyUID for re-login. On login failure (stale keyUID), falls back to first existing account, then creates new.
 
 ### Manual checks (when smoke test isn't enough)
 
