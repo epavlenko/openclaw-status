@@ -186,19 +186,33 @@ export const statusPlugin = {
           );
         }
 
-        await client.startMessenger();
-
-        // Auto-join communities from config + persistent store
-        const stored = await loadCommunityStore(account.dataDir);
-        const allCommunityIds = [
-          ...new Set([...account.communityIds, ...stored.communityIds]),
-        ];
-        for (const cid of allCommunityIds) {
-          await joinCommunityIfNeeded(client, cid);
-        }
+        // startMessenger blocks for ~10 min on first launch (Waku peer discovery).
+        // Fire-and-forget — don't await. All subsequent RPC calls queue behind it
+        // and execute once messenger is ready.
+        console.log(`[status] Starting messenger (may take ~10 min on first launch)...`);
+        void client.startMessenger().then(
+          () => console.log(`[status] Messenger started`),
+          (err) => console.error(`[status] startMessenger error:`, err),
+        );
 
         setStatus({ connected: true, running: true, lastConnectedAt: Date.now() });
-        console.log(`[status] Account ${accountId} connected`);
+        console.log(`[status] Account ${accountId} connected (messenger starting in background)`);
+
+        // Auto-join communities from config + persistent store.
+        // These RPC calls queue behind startMessenger and execute when ready.
+        void (async () => {
+          const stored = await loadCommunityStore(account.dataDir);
+          const allCommunityIds = [
+            ...new Set([...account.communityIds, ...stored.communityIds]),
+          ];
+          for (const cid of allCommunityIds) {
+            try {
+              await joinCommunityIfNeeded(client, cid);
+            } catch (err) {
+              console.error(`[status] Failed to join community ${cid}:`, err);
+            }
+          }
+        })();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setStatus({ connected: false, running: false, lastError: msg });

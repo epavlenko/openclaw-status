@@ -30,7 +30,7 @@ describe("startBackendProcess", () => {
 
 describe("waitForHealthy", () => {
   it("returns false for unreachable URL within timeout", async () => {
-    const result = await waitForHealthy("http://127.0.0.1:59999", 1000, 200);
+    const result = await waitForHealthy("http://127.0.0.1:61777", 1000, 200);
     expect(result).toBe(false);
   });
 });
@@ -38,7 +38,7 @@ describe("waitForHealthy", () => {
 describe("ensureBackend", () => {
   it("returns error when explicit binary does not exist", async () => {
     const r = await ensureBackend(
-      "http://127.0.0.1:59999",
+      "http://127.0.0.1:61777",
       "/tmp/no-such-binary",
     );
     expect(r.ok).toBe(false);
@@ -47,7 +47,7 @@ describe("ensureBackend", () => {
   });
 
   it("attempts download when no binary found", async () => {
-    const r = await ensureBackend("http://127.0.0.1:59999");
+    const r = await ensureBackend("http://127.0.0.1:61777");
     // Either succeeds (binary downloaded/found) or fails with download error
     // — should NOT fail with a generic "not found"
     if (!r.ok) {
