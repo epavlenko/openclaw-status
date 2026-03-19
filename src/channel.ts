@@ -161,6 +161,15 @@ async function joinCommunityIfNeeded(
     console.warn(`[status] fetchCommunity failed (may still work): ${err}`);
   }
 
+  // Spectate community — subscribes to Waku pubsub topics.
+  // Without this, requestToJoinCommunity won't reach the control node.
+  console.log(`[status] Spectating community ${short}...`);
+  try {
+    await client.spectateCommunity(communityId);
+  } catch (err) {
+    console.warn(`[status] spectateCommunity failed (may still work): ${err}`);
+  }
+
   // Always use requestToJoinCommunity — it sends the request to the
   // community control node via Waku. joinCommunity is LOCAL-ONLY and
   // never results in isMember: true.

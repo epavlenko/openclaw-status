@@ -64,7 +64,11 @@ export class StatusClient {
   }
 
   async initialize(dataDir: string): Promise<Record<string, unknown>> {
-    return this.post("/statusgo/InitializeApplication", { dataDir });
+    return this.post("/statusgo/InitializeApplication", {
+      dataDir,
+      logEnabled: true,
+      logLevel: "DEBUG",
+    });
   }
 
   async createAccount(displayName: string, password: string, dataDir: string): Promise<Record<string, unknown>> {
@@ -110,6 +114,15 @@ export class StatusClient {
       tryDatabase: true,
       waitForResponse: true,
     }]);
+  }
+
+  /**
+   * Spectate a community — subscribes to its Waku pubsub topics without joining.
+   * MUST be called before requestToJoinCommunity, otherwise the join request
+   * won't be delivered to the community control node.
+   */
+  async spectateCommunity(communityId: string): Promise<RpcResponse> {
+    return this.callRpc("wakuext_spectateCommunity", [communityId]);
   }
 
   async getAccounts(): Promise<Array<{ wallet?: boolean; address: string }>> {

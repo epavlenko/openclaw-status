@@ -350,12 +350,19 @@ List accounts (wallet addresses).
 ```
 1. Get wallet address: accounts_getAccounts → find wallet: true
 2. Fetch community description: wakuext_fetchCommunity
-3. Request to join: wakuext_requestToJoinCommunity with addressesToReveal
-4. Wait for community description update via Waku (isMember becomes true)
-5. Now wakuext_sendChatMessage works
+3. Spectate community: wakuext_spectateCommunity (subscribes to Waku topics!)
+4. Request to join: wakuext_requestToJoinCommunity with addressesToReveal
+5. Wait for community owner to accept (open communities: auto-accept)
+6. isMember becomes true → wakuext_sendChatMessage works
 ```
 
-**Common mistake:** Using `wakuext_joinCommunity` instead of `wakuext_requestToJoinCommunity`.
+**Critical:** Step 3 (spectate) is required. Without it, the join request is sent
+but never delivered to the community control node because the bot isn't subscribed
+to the community's Waku pubsub topics. 1:1 messages work without spectating,
+but community operations do not.
+
+**Common mistake #1:** Skipping `spectateCommunity` before `requestToJoinCommunity`.
+**Common mistake #2:** Using `wakuext_joinCommunity` instead of `requestToJoinCommunity`.
 `joinCommunity` is LOCAL-ONLY and will never result in `isMember: true`.
 
 ---
