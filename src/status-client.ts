@@ -100,6 +100,7 @@ export class StatusClient {
   async fetchCommunity(communityKey: string): Promise<RpcResponse> {
     return this.callRpc("wakuext_fetchCommunity", [{
       communityKey,
+      tryDatabase: true,
       waitForResponse: true,
     }]);
   }
