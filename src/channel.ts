@@ -115,12 +115,23 @@ async function joinCommunityIfNeeded(
     console.warn(`[status] fetchCommunity failed (may still work): ${err}`);
   }
 
-  console.log(`[status] Requesting to join community ${short}...`);
-  const result = await client.joinCommunity(communityId);
-  if (result.error) {
-    console.error(`[status] Join failed: ${result.error.message}`);
-  } else {
-    console.log(`[status] Join request sent for community ${short}...`);
+  // Retry join — RPC methods may not be registered immediately after startMessenger
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    console.log(`[status] Requesting to join community ${short}... (attempt ${attempt})`);
+    const result = await client.joinCommunity(communityId);
+    if (result.error) {
+      const msg = result.error.message ?? "";
+      if (msg.includes("does not exist") && attempt < maxAttempts) {
+        console.log(`[status] RPC not ready, retrying in 5s...`);
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
+      console.error(`[status] Join failed: ${msg}`);
+    } else {
+      console.log(`[status] Join request sent for community ${short}`);
+    }
+    break;
   }
 }
 
