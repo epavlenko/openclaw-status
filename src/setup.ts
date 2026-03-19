@@ -8,8 +8,8 @@
  *   4. Start and wait for healthy
  */
 
-import { existsSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, openSync } from "node:fs";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { StatusClient } from "./status-client.js";
@@ -140,9 +140,14 @@ export function startBackendProcess(
     DYLD_LIBRARY_PATH: `${binDir}:${process.env.DYLD_LIBRARY_PATH ?? ""}`,
   };
 
+  // Log to file instead of /dev/null — critical for debugging Go-side errors
+  const logDir = join(homedir(), ".openclaw", "data", "openclaw-status");
+  mkdirSync(logDir, { recursive: true });
+  const logFd = openSync(join(logDir, "status-backend.log"), "a");
+
   const child = spawn(abs, ["--address", `127.0.0.1:${port}`], {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", logFd, logFd],
     env,
   });
   child.unref();

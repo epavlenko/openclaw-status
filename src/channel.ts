@@ -145,11 +145,10 @@ async function joinCommunityIfNeeded(
   const communityId = parseCommunityId(rawCommunityId);
   const short = communityId.slice(0, 16);
 
-  // Check if already joined
+  // Check if already a full member (isMember, not just joined)
   const joined = await client.joinedCommunities();
-  const alreadyJoined = joined.some((c) => c.id === communityId);
-
-  if (alreadyJoined) {
+  const existing = joined.find((c) => c.id === communityId);
+  if (existing?.isMember) {
     console.log(`[status] Already a member of community ${short}...`);
     return;
   }
@@ -162,13 +161,14 @@ async function joinCommunityIfNeeded(
     console.warn(`[status] fetchCommunity failed (may still work): ${err}`);
   }
 
-  // Try direct join first (open communities), fallback to request (closed).
-  // Retry if RPC methods not registered yet after startMessenger.
+  // Always use requestToJoinCommunity — it sends the request to the
+  // community control node via Waku. joinCommunity is LOCAL-ONLY and
+  // never results in isMember: true.
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    console.log(`[status] Joining community ${short}... (attempt ${attempt})`);
+    console.log(`[status] Requesting to join community ${short}... (attempt ${attempt})`);
     try {
-      const result = await client.joinCommunity(communityId);
+      const result = await client.requestToJoinCommunity(communityId);
       if (result.error) {
         const msg = result.error.message ?? "";
         if (msg.includes("does not exist") && attempt < maxAttempts) {
@@ -176,16 +176,13 @@ async function joinCommunityIfNeeded(
           await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
-        // joinCommunity failed — try requestToJoinCommunity (for closed communities)
-        console.log(`[status] Direct join failed (${msg}), trying request to join...`);
-        const reqResult = await client.requestToJoinCommunity(communityId);
-        if (reqResult.error) {
-          console.error(`[status] Join request also failed: ${reqResult.error.message}`);
+        if (msg.includes("already joined") || msg.includes("already a member")) {
+          console.log(`[status] Already joined community ${short}`);
         } else {
-          console.log(`[status] Join request sent for community ${short}`);
+          console.error(`[status] Join request failed: ${msg}`);
         }
       } else {
-        console.log(`[status] Joined community ${short}`);
+        console.log(`[status] Join request sent for community ${short}`);
       }
     } catch (err) {
       if (attempt < maxAttempts) {
