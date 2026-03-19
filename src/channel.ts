@@ -91,6 +91,25 @@ export function parseCommunityId(input: string): string {
   return decodeMultibaseCommunityKey(key);
 }
 
+/** Wait until status-backend RPC handlers are fully ready. */
+async function waitForNodeReady(
+  client: StatusClient,
+  timeoutMs = 60_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      // joinedCommunities is a good canary — it uses wakuext namespace
+      // which is only available after messenger is fully initialized
+      await client.joinedCommunities();
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  return false;
+}
+
 async function joinCommunityIfNeeded(
   client: StatusClient,
   rawCommunityId: string,
@@ -294,9 +313,17 @@ export const statusPlugin = {
         setStatus({ connected: true, running: true, lastConnectedAt: Date.now() });
         console.log(`[status] Account ${accountId} connected (messenger starting in background)`);
 
-        // Auto-join communities from config + persistent store.
-        // These RPC calls queue behind startMessenger and execute when ready.
+        // Auto-join communities after node is ready.
+        // Wait for node.ready signal before attempting joins — RPC handlers crash
+        // if called too early after startMessenger.
         void (async () => {
+          // Wait for node.ready (up to 60s)
+          console.log(`[status] Waiting for node.ready before joining communities...`);
+          const ready = await waitForNodeReady(client, 60_000);
+          if (!ready) {
+            console.warn(`[status] node.ready timeout, attempting joins anyway`);
+          }
+
           const stored = await loadCommunityStore(account.dataDir);
           const allCommunityIds = [
             ...new Set([...account.communityIds, ...stored.communityIds]),
