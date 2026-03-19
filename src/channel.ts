@@ -317,8 +317,10 @@ export const statusPlugin = {
         // Wait for node.ready signal before attempting joins — RPC handlers crash
         // if called too early after startMessenger.
         void (async () => {
-          // Wait for node.ready (up to 60s)
-          console.log(`[status] Waiting for node.ready before joining communities...`);
+          // Wait for node to be fully ready before joining.
+          // RPC handlers crash if called too early after startMessenger.
+          console.log(`[status] Waiting for node to be ready before joining communities...`);
+          await new Promise((r) => setTimeout(r, 10_000));
           const ready = await waitForNodeReady(client, 60_000);
           if (!ready) {
             console.warn(`[status] node.ready timeout, attempting joins anyway`);
