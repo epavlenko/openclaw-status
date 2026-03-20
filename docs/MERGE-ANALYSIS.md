@@ -221,7 +221,7 @@ The wallet module has its own `callRPC` function that reads `STATUS_BACKEND_URL`
 - **Inbound pipeline bypasses SDK** — `enqueueSystemEvent()` workaround. Acknowledged in `REVIEW.md` as a priority item.
 - **No auto-provisioning** — requires systemd setup (by design — see 1.2).
 - **No login lifecycle in plugin** — delegated to `status-login.service`.
-- **No automated tests** — validated through production use.
+- **No automated tests** — validated through manual testing.
 - **Two independent RPC clients** — `status-api.ts` and `wallet/rpc.ts` maintain separate connections.
 - **Unbounded `seenMessages` Set** — grows indefinitely, no eviction.
 - **`chatInfoCache` never cleared** — memory growth on long-running instances.
