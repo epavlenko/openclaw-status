@@ -1,9 +1,13 @@
 # Merge Analysis: openclaw-status Repositories
 
 **Date:** 2026-03-20
-**Status:** Draft — pending review
+**Status:** Draft — for discussion
 
-Two independent implementations of an OpenClaw channel plugin for Status messenger exist in parallel. This document provides a neutral technical comparison and recommends a consolidation path.
+## Background
+
+Václav Pavlín proposed consolidating two independent Status plugin implementations into "one canonical OpenClaw plugin for Status integration that works really well." Both repos were built in parallel with different priorities: Repo B (jimmy-claw) focused on DM messaging, wallet integration, and operational tooling on ARM64 hardware; Repo A (epavlenko) focused on community management, SDK-compliant inbound pipeline, and auto-provisioning — porting patterns from the earlier `status-app-agent` Python bot. Notably, community support (which Repo B struggled with) is working in Repo A.
+
+This document provides a technical comparison to help decide how to merge.
 
 | | **Repo A** (`epavlenko/openclaw-status`) | **Repo B** (`jimmy-claw/status-openclaw-plugin`) |
 |---|---|---|
@@ -304,23 +308,37 @@ One repo hosts both as workspace packages (e.g., `packages/core` from Repo A, `p
 
 ---
 
-## 5. Recommendation
+## 5. Discussion: Choosing a Base
 
-**Option A — merge into `epavlenko/openclaw-status`.**
+The analysis above is meant to inform a joint decision. Here are the key factors to weigh.
 
-The deciding factors:
+### Arguments for Repo A as Base
 
 1. **SDK compliance.** Repo A's inbound pipeline is architecturally correct and cannot be trivially added to Repo B — it requires replacing Repo B's core message handling. Moving in the other direction (adding Repo B's features to Repo A) is additive.
 
-2. **Test coverage.** Merging features into a tested codebase is safer than merging an entire architecture into an untested one. Repo A's 67 unit tests + e2e + smoke pipeline catch regressions during integration.
+2. **Community support works.** The community join flow (fetch → spectate → requestToJoin) is implemented and tested in Repo A. This was identified as a blocking issue for Repo B.
 
-3. **Asymmetric portability.** Repo B's unique assets (wallet, commands, DM, Zod, polling, scripts, docs) are self-contained modules that port cleanly into any host project. Repo A's unique assets (SDK pipeline, auto-provisioning, login lifecycle, community management) are deeply woven into the gateway and cannot be extracted as standalone modules.
+3. **Test coverage.** Merging features into a tested codebase is safer than merging an entire architecture into an untested one. Repo A's 67 unit tests + e2e + smoke pipeline catch regressions during integration.
 
-4. **Production hardening.** Repo A has solved several subtle issues (LoginAccount crash on running node, async login signal, startMessenger blocking, startAccount keep-alive, keyUID fallback cascade) that would need to be re-discovered and re-solved in any other codebase.
+4. **Asymmetric portability.** Repo B's unique assets (wallet, commands, DM, Zod, polling, scripts, docs) are self-contained modules that port cleanly. Repo A's unique assets (SDK pipeline, auto-provisioning, login lifecycle, community management) are deeply woven into the gateway and harder to extract.
 
-### Suggested Integration Sequence
+### Arguments for Repo B as Base
 
-1. **Polling fallback** — Port Repo B's dual WS+poll approach. This is the highest-value, lowest-risk addition and addresses Repo A's main reliability gap on ARM64.
+1. **More user-facing features.** Wallet, commands, governance, DM policies — all working and deployed.
+
+2. **Operational maturity on ARM64.** Weeks of production use, documented known issues, systemd integration, crash recovery.
+
+3. **Contributor continuity.** Jimmy has been actively using and iterating on this plugin in a real community setting.
+
+### Arguments for a New Shared Repo
+
+1. **Neutral ground.** No contributor "loses" their repo.
+
+2. **Clean start.** Opportunity to agree on naming, structure, and ownership together.
+
+### Suggested Integration Sequence (if Repo A is chosen as base)
+
+1. **Polling fallback** — Port Repo B's dual WS+poll approach. Highest-value addition; addresses Repo A's main reliability gap on ARM64.
 
 2. **Zod config schema** — Replace manual TypeScript config parsing with Zod. Add `port`, `dmPolicy`, `allowFrom` fields from Repo B's schema.
 
@@ -336,7 +354,7 @@ The deciding factors:
 
 ### Attribution
 
-All contributions from Repo B should be properly attributed via `Co-Authored-By` headers or a `CONTRIBUTORS.md` file. The wallet module, command system, governance module, operational scripts, and documentation represent significant original work.
+Regardless of which repo is chosen as base, all contributions should be properly attributed via `Co-Authored-By` headers or a `CONTRIBUTORS.md` file. Repo B's wallet module, command system, governance module, operational scripts, and documentation represent significant original work.
 
 ---
 
