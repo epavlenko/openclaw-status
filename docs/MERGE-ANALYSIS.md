@@ -200,31 +200,7 @@ The wallet module has its own `callRPC` function that reads `STATUS_BACKEND_URL`
 
 Both repositories were audited for credential exposure, injection vulnerabilities, authorization gaps, resource exhaustion, and financial safety (wallet operations). The trust boundary model: config/filesystem = trusted; status-backend on localhost = semi-trusted; Waku network (any peer) = untrusted.
 
-### 3.1 Repo B — Issues
-
-Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts` and `send.ts` are Sepolia testnet values used for development/demo purposes, not production credentials. They are flagged below as a pattern issue (hardcoded fallbacks should not ship to production), not as a credential leak.
-
-| Severity | Issue | Location |
-|----------|-------|----------|
-| **Critical** | Zero authorization on `!tip` — any Status user can trigger ETH transactions. No sender check, no rate limit. Wallet drainable in 0.01 ETH increments | `src/commands/tip.ts` |
-| **Critical** | Governance double-execution — approved proposals can be executed multiple times (no lock, no status check before send). Double-spend possible | `src/commands/governance.ts` |
-| High | Hardcoded admin pubkey with no rotation mechanism — if admin account is compromised, governance cannot be recovered | `src/commands/governance.ts` |
-| High | Hardcoded Telegram session key (`agent:main:telegram:direct:78701493`) — all inbound Status messages routed to a single Telegram session regardless of sender | `src/channel.ts` |
-| High | Unbounded `seenMessages` Set — grows indefinitely, OOM via message flood from any peer | `src/channel.ts` |
-| High | `STATUS_BACKEND_URL` env var accepted without validation — SSRF redirect if env is compromised | `src/wallet/rpc.ts` |
-| High | `port` config param enables local SSRF — no range validation, can hit any localhost service | `src/status-api.ts` |
-| High | No rate limiting on tip flow — 0.01 ETH ceiling per-tip but unlimited tips per-sender, per-day | `src/commands/tip.ts` |
-| High | `DATA_DIR` interpolated unsanitized into JSON body in shell script — JSON injection | `extras/scripts/status-login.sh` |
-| High | Float precision loss in `ethToWeiHex` — `parseFloat(amount) * 1e18` loses precision beyond 2^53 | `src/wallet/send.ts` |
-| High | Password stored as plaintext in config, no keychain/env-ref pattern | `src/config-schema.ts` |
-| Medium | Hardcoded test wallet password as fallback default in 3 files — bad pattern for production, should require explicit config | `src/wallet/send.ts`, `src/commands/tip.ts`, `extras/scripts/status-login.sh` |
-| Medium | Raw backend error text propagated to chat users — leaks internal paths, stack traces | `src/wallet/rpc.ts`, `src/status-api.ts` |
-| Medium | `chatInfoCache` never cleared — memory growth vector | `src/channel.ts` |
-| Medium | `Math.random()` proposal IDs — trivially guessable, and auto-resolution makes them irrelevant when only one proposal is pending | `src/commands/governance.ts` |
-| Medium | Non-atomic file writes (`writeFileSync`) — crash mid-write corrupts governance state, resetting signers | `src/commands/governance.ts` |
-| Medium | `displayName` from user input stored unsanitized — potential stored injection | `src/commands/registry.ts` |
-
-### 3.2 Repo A — Issues
+### 3.1 Repo A — Issues
 
 | Severity | Issue | Location |
 |----------|-------|----------|
@@ -242,11 +218,35 @@ Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts
 | Low | WebSocket reconnects indefinitely with no backoff or circuit breaker | `src/status-client.ts:256–259` |
 | Low | Backend error text propagated verbatim in exceptions | `src/status-client.ts:292–299` |
 
+### 3.2 Repo B — Issues
+
+Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts` and `send.ts` are Sepolia testnet values used for development/demo purposes, not production credentials. They are flagged below as a pattern issue (hardcoded fallbacks should not ship to production), not as a credential leak.
+
+| Severity | Issue | Location |
+|----------|-------|----------|
+| **Critical** | Zero authorization on `!tip` — any Status user can trigger ETH transactions. No sender check, no rate limit. Wallet drainable in 0.01 ETH increments | `src/commands/tip.ts` |
+| **Critical** | Governance execution flow broken — after approval, the message instructs the user to re-send `!tip`, but that re-enters `checkGovernance()` and creates a *new* proposal instead of executing the approved one. Approved proposals may never execute through the normal flow. The `executeProposal()` function itself is safe (checks `status === "approved"` with sync file I/O), but no code path actually calls it after approval | `src/commands/governance.ts` |
+| High | Hardcoded admin pubkey with no rotation mechanism — if admin account is compromised, governance cannot be recovered | `src/commands/governance.ts` |
+| High | Hardcoded Telegram session key (`agent:main:telegram:direct:78701493`) — all inbound Status messages routed to a single Telegram session regardless of sender | `src/channel.ts` |
+| High | Unbounded `seenMessages` Set — grows indefinitely, OOM via message flood from any peer | `src/channel.ts` |
+| High | `STATUS_BACKEND_URL` env var accepted without validation — SSRF redirect if env is compromised | `src/wallet/rpc.ts` |
+| High | `port` config param enables local SSRF — no range validation, can hit any localhost service | `src/status-api.ts` |
+| High | No rate limiting on tip flow — 0.01 ETH ceiling per-tip but unlimited tips per-sender, per-day | `src/commands/tip.ts` |
+| High | `DATA_DIR` interpolated unsanitized into JSON body in shell script — JSON injection | `extras/scripts/status-login.sh` |
+| High | Float precision loss in `ethToWeiHex` — `parseFloat(amount) * 1e18` loses precision beyond 2^53 | `src/wallet/send.ts` |
+| High | Password stored as plaintext in config, no keychain/env-ref pattern | `src/config-schema.ts` |
+| Medium | Hardcoded test wallet password as fallback default in 3 files — bad pattern for production, should require explicit config | `src/wallet/send.ts`, `src/commands/tip.ts`, `extras/scripts/status-login.sh` |
+| Medium | Raw backend error text propagated to chat users — leaks internal paths, stack traces | `src/wallet/rpc.ts`, `src/status-api.ts` |
+| Medium | `chatInfoCache` never cleared — memory growth vector | `src/channel.ts` |
+| Medium | `Math.random()` proposal IDs — trivially guessable, and auto-resolution makes them irrelevant when only one proposal is pending | `src/commands/governance.ts` |
+| Medium | Non-atomic file writes (`writeFileSync`) — crash mid-write corrupts governance state, resetting signers | `src/commands/governance.ts` |
+| Medium | `displayName` from user input stored unsanitized — potential stored injection | `src/commands/registry.ts` |
+
 ### 3.3 Security Comparison
 
 | Aspect | Repo A | Repo B |
 |--------|--------|--------|
-| Critical findings | 0 | 2 (unauthorized transactions, governance double-execution) |
+| Critical findings | 0 | 2 (unauthorized transactions, broken governance execution) |
 | High findings | 4 | 8 |
 | Medium findings | 5 | 6 |
 | Hardcoded test values | None | 3 files (testnet wallet password as fallback default) |
@@ -255,7 +255,7 @@ Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts
 | Config injection | SSRF via `baseUrl`, path traversal via `dataDir` | SSRF via `port`, JSON injection in shell scripts |
 | Resource exhaustion | WebSocket no backoff | Unbounded Set + Map growth |
 
-**Key takeaway:** Repo B has critical financial safety issues (unauthorized transactions, governance double-execution) that must be fixed before production use regardless of merge direction. Repo A's issues are primarily about input validation and trust boundaries — serious but not exploitable without config access or a compromised backend. Both repos share the same pattern of plaintext passwords in config with no keychain integration.
+**Key takeaway:** Repo B has critical financial safety issues (unauthorized transactions, broken governance execution flow) that must be fixed before production use regardless of merge direction. Repo A's issues are primarily about input validation and trust boundaries — serious but not exploitable without config access or a compromised backend. Both repos share the same pattern of plaintext passwords in config with no keychain integration.
 
 ---
 
@@ -393,7 +393,7 @@ The analysis above is meant to inform a joint decision. Here are the key factors
 
 4. **Asymmetric portability.** Repo B's unique assets (wallet, commands, DM, Zod, polling, scripts, docs) are self-contained modules that port cleanly. Repo A's unique assets (SDK pipeline, auto-provisioning, login lifecycle, community management) are deeply woven into the gateway and harder to extract.
 
-5. **Security posture.** Repo A has zero critical security findings. Repo B has 2 critical issues (unauthorized wallet transactions, governance double-execution) and 8 high-severity findings. Merging into Repo A avoids inheriting these issues in the base; they can be fixed during the porting process.
+5. **Security posture.** Repo A has zero critical security findings. Repo B has 2 critical issues (unauthorized wallet transactions, broken governance execution flow) and 8 high-severity findings. Merging into Repo A avoids inheriting these issues in the base; they can be fixed during the porting process.
 
 6. **Lower effort.** Option A requires ~20–34 hours; Option B requires ~35–50 hours, largely because Repo B's core must be replaced rather than extended.
 
