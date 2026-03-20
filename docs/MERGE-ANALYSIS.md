@@ -286,6 +286,8 @@ Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts
 
 ## 5. Merge Options
 
+*Hour estimates below are approximate and intended for relative comparison of effort between options, not as delivery commitments.*
+
 ### Option A: Merge Into Repo A
 
 Repo B's wallet, DM, polling, Zod, and operational assets are contributed as PRs into `epavlenko/openclaw-status`.
