@@ -3,6 +3,8 @@
 **Date:** 2026-03-20
 **Status:** Draft — for discussion
 
+> **Disclosure:** This document was written by the author of Repo A. It aims to be objective, but inherent bias is possible. Repo B's team is invited to review, challenge, and amend any part of this analysis.
+
 ## Background
 
 Václav Pavlín proposed consolidating two independent Status plugin implementations into "one canonical OpenClaw plugin for Status integration that works really well." Both repos were built in parallel with different priorities: Repo B (jimmy-claw) focused on DM messaging, wallet integration, and operational tooling on ARM64 hardware; Repo A (epavlenko) focused on community management, SDK-compliant inbound pipeline, and auto-provisioning — porting patterns from the earlier `status-app-agent` Python bot. Notably, community support (which Repo B struggled with) is working in Repo A.
@@ -22,7 +24,7 @@ This document provides a technical comparison to help decide how to merge.
 
 ### 1.1 Inbound Message Pipeline
 
-This is the single most consequential architectural difference between the two projects.
+This is the most significant architectural difference between the two projects.
 
 **Repo A** uses the OpenClaw SDK dispatch flow, modeled after the IRC plugin pattern:
 
@@ -39,7 +41,7 @@ WebSocket signal (messages.new)
 
 This gives the host framework full control over routing, session management, envelope formatting, and reply dispatch. The plugin participates in the standard channel lifecycle.
 
-**Repo B** bypasses the SDK entirely:
+**Repo B** uses a system event workaround:
 
 ```
 WebSocket signal / poll
@@ -47,14 +49,13 @@ WebSocket signal / poll
   → enqueueSystemEvent() or `openclaw system event --mode now` CLI
 ```
 
-Consequences of Repo B's approach:
-- DM policies (`pairing`, `allowlist`) are defined in the config schema but **never enforced** — the `allowFrom` array is not checked against incoming senders
-- No sender attribution beyond a text prefix — the agent cannot programmatically identify who sent a message
-- No reply routing — the agent cannot reply back to the specific Status sender or group
+This approach was practical for getting a working bot quickly, but has trade-offs:
+- DM policies (`pairing`, `allowlist`) are defined in the config schema but not enforced at the inbound gate
+- No programmatic sender attribution — the agent sees a text prefix, not structured metadata
+- No reply routing back to the specific Status sender or group
 - No session management — the framework cannot track conversation history per peer
-- Messages do not appear in the standard channel inbound log
 
-Repo B's own code review (`REVIEW.md`) identifies this as "the #1 thing to fix for proper integration."
+Repo B's own code review (`REVIEW.md`) identifies this as a priority item for improvement.
 
 ### 1.2 Gateway Lifecycle
 
@@ -71,19 +72,16 @@ Repo B's own code review (`REVIEW.md`) identifies this as "the #1 thing to fix f
 9. Spectate all joined communities (required after every restart for Waku topic subscription)
 10. Hold promise alive (`await ctx.abortSignal`) — gateway expects long-lived `startAccount()`
 
-**Repo B** delegates most of this to external infrastructure:
+**Repo B** takes a different approach, delegating lifecycle management to systemd:
 
-1. Health check — fail if `status-backend` is not already running
+1. Health check — expect `status-backend` to be already running (via `status-backend.service`)
 2. Wait up to 60s for `getActiveChats` to return (login handled by `status-login.service`)
 3. Fetch public key from `settings_getSettings`
 4. Seed `seenMessages` set from recent chat history
 5. Start WebSocket signal listener + polling interval
 6. Return `{ stop }` cleanup handle
 
-Repo B assumes `status-backend` is managed by systemd and already logged in. The plugin itself cannot start, initialize, or log in to the backend. This means:
-- First-time setup requires manual systemd configuration
-- Restarting the plugin alone (without systemd) does not restart the backend
-- No auto-provisioning for development or CI environments
+This systemd-based approach reflects real production experience on ARM64 hardware, where process management through systemd provides auto-restart on SIGSEGV crashes and proper service ordering. The trade-off is that the plugin cannot self-provision — first-time setup requires manual systemd configuration.
 
 ### 1.3 Community Management
 
@@ -96,7 +94,7 @@ Repo B assumes `status-backend` is managed by systemd and already logged in. The
 - `joinCommunityIfNeeded()` — idempotent join with fetch → spectate → requestToJoin sequence
 - Skill definition (`SKILL.md`) for agent discovery
 
-**Repo B** has no community management. It was designed for 1:1 DMs, with group chat support added later via polling.
+**Repo B** was designed for 1:1 DMs, with group chat support added later via polling. Community join/leave is not exposed to the agent.
 
 ### 1.4 Status Backend Client
 
@@ -127,23 +125,35 @@ The wallet module has its own `callRPC` function that reads `STATUS_BACKEND_URL`
 - `waitForNodeReady()` — polls `isRpcReady()` before community joins
 
 **Repo B:**
-- `seenMessages` dedup — Set-based message ID tracking (but grows unbounded)
+- `seenMessages` dedup — Set-based message ID tracking
 - Per-chat `lastSeenTimestamp` — avoids replaying old messages
 - Exponential backoff WebSocket reconnect (1s → 30s cap)
 - Group chat info caching for DM/group resolution
 - Dual-mode inbound (WS + polling) — resilient to WebSocket instability on ARM64
+- systemd auto-restart on SIGSEGV crashes with full re-login sequence
+- `requestAllHistoricMessages` after crash recovery to fetch missed Waku messages
 
-### 1.7 Modularity and Separation of Concerns
+### 1.6 Modularity and Separation of Concerns
 
 **Repo A** keeps the entire gateway lifecycle, inbound dispatch, community join logic, and outbound adapter in a single 652-line `channel.ts`. This is an effective approach for rapid iteration but means that testing, reading, or replacing individual concerns (e.g., inbound handler vs. login flow) requires working inside a large file. Config, community store, and the tool are properly split into separate modules.
 
-**Repo B** separates the HTTP API client (`status-api.ts`), WebSocket signals (`status-signals.ts`), and wallet RPC (`wallet/rpc.ts`) into distinct modules. The command system (`commands/*`) is cleanly separated from the channel adapter. However, the separation introduces the dual-RPC-client problem and the wallet module is dead code — it is never wired into the channel plugin or command flow.
+**Repo B** separates the HTTP API client (`status-api.ts`), WebSocket signals (`status-signals.ts`), and wallet RPC (`wallet/rpc.ts`) into distinct modules. The command system (`commands/*`) is cleanly separated from the channel adapter. However, the separation introduces the dual-RPC-client issue mentioned in 1.4.
 
-### 1.8 Dependency Surface
+### 1.7 Dependency Surface
 
 **Repo A:** Zero runtime dependencies. Uses only Node.js built-ins (`fetch`, `WebSocket`, `fs`, `child_process`). Dev dependencies: `typescript`, `vitest`, `@types/node`.
 
 **Repo B:** Runtime dependencies: `ws` (WebSocket library), `zod` (schema validation). Peer dependency: `openclaw`. Dev dependencies: `typescript`, `@types/ws`. The `ws` dependency is notable — Repo A achieves the same functionality using the native `WebSocket` global (available in Node.js 22+), avoiding the extra dependency.
+
+### 1.8 Testing
+
+**Repo A:**
+- Unit tests (vitest): config resolution, channel contract, community store, community tool, setup provisioning, `parseCommunityId` — 67 tests total
+- E2E tests (`test/e2e-tool.sh`): real tool calls through `openclaw agent` against live backend
+- Smoke test (`test/smoke.sh`): build → unit tests → gateway restart → backend health → e2e → post-e2e verification
+- Documented testing checklist in AGENTS.md with known failure patterns
+
+**Repo B:** No automated test files. Validation has been through manual testing and weeks of production use on ARM64.
 
 ---
 
@@ -196,72 +206,9 @@ The wallet module has its own `callRPC` function that reads `STATUS_BACKEND_URL`
 
 ---
 
-## 3. Security Audit
+## 3. Known Functional Issues
 
-Both repositories were audited for credential exposure, injection vulnerabilities, authorization gaps, resource exhaustion, and financial safety (wallet operations). The trust boundary model: config/filesystem = trusted; status-backend on localhost = semi-trusted; Waku network (any peer) = untrusted.
-
-### 3.1 Repo A — Issues
-
-| Severity | Issue | Location |
-|----------|-------|----------|
-| High | Binary downloaded from GitHub Release with no checksum/signature verification — supply-chain risk | `src/setup.ts:67–100` |
-| High | SSRF via `baseUrl` config — no host/scheme restriction, any URL accepted | `src/status-client.ts:56` |
-| High | Unsanitized Waku message content passed as `CommandBody` to agent — prompt/command injection surface | `src/channel.ts:270` |
-| High | Path traversal via `dataDir` — `community-store.ts` and `channel.ts` join user-controlled paths with no containment check | `src/community-store.ts:15–24` |
-| Medium | `status_community` tool callable by any agent session — unauthenticated inbound Waku message can trigger community joins via agent | `src/community-tool.ts:46` |
-| Medium | No sender authentication on inbound messages — any community member triggers agent dispatch | `src/channel.ts:447–463` |
-| Medium | `LD_LIBRARY_PATH` injection via `binaryPath` config — operator-controlled directory prepended to library search path | `src/setup.ts:136–141` |
-| Medium | No response size limit on HTTP/WebSocket — OOM via large backend response | `src/status-client.ts` |
-| Medium | TOCTOU race in `addCommunityId` — concurrent calls can produce duplicates | `src/community-store.ts:47–61` |
-| Medium | Password stored and transmitted as plaintext over localhost HTTP | `src/config.ts:114` |
-| Low | Shell injection pattern in `execSync` — currently safe (hardcoded values) but fragile if values become configurable | `src/setup.ts:79–83` |
-| Low | WebSocket reconnects indefinitely with no backoff or circuit breaker | `src/status-client.ts:256–259` |
-| Low | Backend error text propagated verbatim in exceptions | `src/status-client.ts:292–299` |
-
-### 3.2 Repo B — Issues
-
-Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts` and `send.ts` are Sepolia testnet values used for development/demo purposes, not production credentials. They are flagged below as a pattern issue (hardcoded fallbacks should not ship to production), not as a credential leak.
-
-| Severity | Issue | Location |
-|----------|-------|----------|
-| **Critical** | Zero authorization on `!tip` — any Status user can trigger ETH transactions. No sender check, no rate limit. Wallet drainable in 0.01 ETH increments | `src/commands/tip.ts` |
-| **Critical** | Governance execution flow broken — after approval, the message instructs the user to re-send `!tip`, but that re-enters `checkGovernance()` and creates a *new* proposal instead of executing the approved one. Approved proposals may never execute through the normal flow. The `executeProposal()` function itself is safe (checks `status === "approved"` with sync file I/O), but no code path actually calls it after approval | `src/commands/governance.ts` |
-| High | Hardcoded admin pubkey with no rotation mechanism — if admin account is compromised, governance cannot be recovered | `src/commands/governance.ts` |
-| High | Hardcoded Telegram session key (`agent:main:telegram:direct:78701493`) — all inbound Status messages routed to a single Telegram session regardless of sender | `src/channel.ts` |
-| High | Unbounded `seenMessages` Set — grows indefinitely, OOM via message flood from any peer | `src/channel.ts` |
-| High | `STATUS_BACKEND_URL` env var accepted without validation — SSRF redirect if env is compromised | `src/wallet/rpc.ts` |
-| High | `port` config param enables local SSRF — no range validation, can hit any localhost service | `src/status-api.ts` |
-| High | No rate limiting on tip flow — 0.01 ETH ceiling per-tip but unlimited tips per-sender, per-day | `src/commands/tip.ts` |
-| High | `DATA_DIR` interpolated unsanitized into JSON body in shell script — JSON injection | `extras/scripts/status-login.sh` |
-| High | Float precision loss in `ethToWeiHex` — `parseFloat(amount) * 1e18` loses precision beyond 2^53 | `src/wallet/send.ts` |
-| High | Password stored as plaintext in config, no keychain/env-ref pattern | `src/config-schema.ts` |
-| Medium | Hardcoded test wallet password as fallback default in 3 files — bad pattern for production, should require explicit config | `src/wallet/send.ts`, `src/commands/tip.ts`, `extras/scripts/status-login.sh` |
-| Medium | Raw backend error text propagated to chat users — leaks internal paths, stack traces | `src/wallet/rpc.ts`, `src/status-api.ts` |
-| Medium | `chatInfoCache` never cleared — memory growth vector | `src/channel.ts` |
-| Medium | `Math.random()` proposal IDs — trivially guessable, and auto-resolution makes them irrelevant when only one proposal is pending | `src/commands/governance.ts` |
-| Medium | Non-atomic file writes (`writeFileSync`) — crash mid-write corrupts governance state, resetting signers | `src/commands/governance.ts` |
-| Medium | `displayName` from user input stored unsanitized — potential stored injection | `src/commands/registry.ts` |
-
-### 3.3 Security Comparison
-
-| Aspect | Repo A | Repo B |
-|--------|--------|--------|
-| Critical findings | 0 | 2 (unauthorized transactions, broken governance execution) |
-| High findings | 4 | 8 |
-| Medium findings | 5 | 6 |
-| Hardcoded test values | None | 3 files (testnet wallet password as fallback default) |
-| Financial safety | No wallet code | No authorization, no rate limit, precision bugs |
-| Inbound trust boundary | No sender allowlist, but dispatches through SDK | No sender check, routes to hardcoded Telegram session |
-| Config injection | SSRF via `baseUrl`, path traversal via `dataDir` | SSRF via `port`, JSON injection in shell scripts |
-| Resource exhaustion | WebSocket no backoff | Unbounded Set + Map growth |
-
-**Key takeaway:** Repo B has critical financial safety issues (unauthorized transactions, broken governance execution flow) that must be fixed before production use regardless of merge direction. Repo A's issues are primarily about input validation and trust boundaries — serious but not exploitable without config access or a compromised backend. Both repos share the same pattern of plaintext passwords in config with no keychain integration.
-
----
-
-## 4. Known Functional Issues
-
-### 4.1 Repo A
+### 3.1 Repo A
 
 - **No polling fallback** — relies solely on WebSocket signals. If WebSocket is unstable (documented on ARM64 in Repo B's KNOWN-ISSUES.md), messages can be missed.
 - **No DM support** — only `chatTypes: ["group"]`. The v0.5 roadmap item.
@@ -269,18 +216,36 @@ Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts
 - **WebSocket reconnect is naive** — fixed 2s delay, no exponential backoff.
 - **No seenMessages dedup** — if WebSocket reconnects and replays recent signals, duplicates could be processed.
 
-### 4.2 Repo B
+### 3.2 Repo B
 
-- **Broken inbound pipeline** — `enqueueSystemEvent()` bypasses SDK. Acknowledged as issue #1 in their own `REVIEW.md`.
-- **No auto-provisioning** — requires manual systemd setup.
-- **No login lifecycle** — delegated to external `status-login.service`.
-- **No tests** — 0 unit, 0 e2e, 0 smoke.
+- **Inbound pipeline bypasses SDK** — `enqueueSystemEvent()` workaround. Acknowledged in `REVIEW.md` as a priority item.
+- **No auto-provisioning** — requires systemd setup (by design — see 1.2).
+- **No login lifecycle in plugin** — delegated to `status-login.service`.
+- **No automated tests** — validated through production use.
 - **Two independent RPC clients** — `status-api.ts` and `wallet/rpc.ts` maintain separate connections.
 - **Unbounded `seenMessages` Set** — grows indefinitely, no eviction.
 - **`chatInfoCache` never cleared** — memory growth on long-running instances.
-- **Zod schema bug** — `z.number().default(21405).optional()` — `.default()` before `.optional()` has ambiguous behavior in Zod v4.
+- **Zod schema ordering** — `z.number().default(21405).optional()` — `.default()` before `.optional()` has ambiguous behavior in Zod v4.
 - **No community management** — no join/leave/list, no invite link parsing.
-- **Wallet module is dead code** — not wired into channel plugin or command dispatch flow.
+- **Wallet module not wired into channel plugin** — exists as standalone module, not integrated into message dispatch.
+
+---
+
+## 4. Security Audit
+
+A detailed security audit of both repositories is available in [SECURITY-AUDIT.md](SECURITY-AUDIT.md). Summary below.
+
+| Aspect | Repo A | Repo B |
+|--------|--------|--------|
+| Critical findings | 0 | 2 (unauthorized tip transactions, broken governance execution) |
+| High findings | 4 | 8 |
+| Medium findings | 5 | 6 |
+| Financial safety | No wallet code | No authorization on `!tip`, no rate limit, float precision bugs |
+| Inbound trust boundary | No sender allowlist, but dispatches through SDK | No sender check, routes to hardcoded Telegram session |
+| Config injection | SSRF via `baseUrl`, path traversal via `dataDir` | SSRF via `port`, JSON injection in shell scripts |
+| Resource exhaustion | WebSocket no backoff | Unbounded Set + Map growth |
+
+Both repos share the same pattern of plaintext passwords in config with no keychain integration.
 
 ---
 
@@ -293,16 +258,16 @@ Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts
 Repo B's wallet, DM, polling, Zod, and operational assets are contributed as PRs into `epavlenko/openclaw-status`.
 
 **Pros:**
-- Preserves the correct SDK inbound pipeline — no architectural rework needed
+- SDK inbound pipeline preserved — no architectural rework needed
 - 67 existing tests provide a safety net for integration
 - Wallet and DM features are additive modules that integrate cleanly
 - Auto-provisioning and login lifecycle are preserved
 - Community management is preserved
-- No critical security findings to inherit in the base
 
 **Cons:**
 - Repo B features need adaptation to Repo A's patterns (e.g., wallet RPC must use `StatusClient`)
 - Jimmy loses primary ownership of his repository
+- Repo B's operational knowledge (ARM64 quirks, crash recovery) must be carefully preserved
 
 **Estimated work:**
 
@@ -325,16 +290,14 @@ The core from Repo A (SDK pipeline, auto-provisioning, login lifecycle, communit
 
 **Pros:**
 - Repo B already has wallet, commands, DM support, and operational scripts in place
+- Proven in production on ARM64 for weeks — known issues are documented and mitigated
+- Jimmy retains primary ownership and continuity
 
 **Cons:**
 - Requires replacing the inbound pipeline — affects `channel.ts` (the largest file)
-- Requires adding auto-provisioning — new module, changes gateway entry point
-- Requires adding login lifecycle — replaces the health-check-only approach
-- Requires adding community management — new modules + tool registration
-- Requires adding tests — from scratch or adapted from Repo A
-- Net result is effectively a rewrite of Repo B's core, preserving only the wallet and command modules
-- Higher risk due to no existing tests to catch regressions
-- 2 critical + 8 high security issues must be fixed before or during merge
+- Requires adding auto-provisioning, login lifecycle, community management, and tests
+- Net result is a significant rework of Repo B's core, preserving wallet and command modules
+- No existing tests to catch regressions during the rework
 
 **Estimated work:**
 
@@ -360,6 +323,7 @@ Create a new repository (e.g., `openclaw-community/status`) and cherry-pick from
 **Pros:**
 - Neutral ground — neither contributor "loses" their repo
 - Opportunity to redesign the file layout from scratch
+- Both contributors start as equal co-owners
 
 **Cons:**
 - Git history from both repos is lost (or requires complex merge)
@@ -387,35 +351,35 @@ The analysis above is meant to inform a joint decision. Here are the key factors
 
 ### Arguments for Repo A as Base
 
-1. **SDK compliance.** Repo A's inbound pipeline is architecturally correct and cannot be trivially added to Repo B — it requires replacing Repo B's core message handling. Moving in the other direction (adding Repo B's features to Repo A) is additive.
+1. **SDK compliance.** Repo A's inbound pipeline uses the standard SDK dispatch flow. Adding it to Repo B would require replacing core message handling. Moving in the other direction (adding Repo B's features to Repo A) is additive.
 
 2. **Community support works.** The community join flow (fetch → spectate → requestToJoin) is implemented and tested in Repo A. This was identified as a blocking issue for Repo B.
 
-3. **Test coverage.** Merging features into a tested codebase is safer than merging an entire architecture into an untested one. Repo A's 67 unit tests + e2e + smoke pipeline catch regressions during integration.
+3. **Test coverage.** Merging features into a tested codebase is safer than merging an entire architecture into an untested one.
 
 4. **Asymmetric portability.** Repo B's unique assets (wallet, commands, DM, Zod, polling, scripts, docs) are self-contained modules that port cleanly. Repo A's unique assets (SDK pipeline, auto-provisioning, login lifecycle, community management) are deeply woven into the gateway and harder to extract.
 
-5. **Security posture.** Repo A has zero critical security findings. Repo B has 2 critical issues (unauthorized wallet transactions, broken governance execution flow) and 8 high-severity findings. Merging into Repo A avoids inheriting these issues in the base; they can be fixed during the porting process.
-
-6. **Lower effort.** Option A requires ~20–34 hours; Option B requires ~35–50 hours, largely because Repo B's core must be replaced rather than extended.
-
 ### Arguments for Repo B as Base
 
-1. **More user-facing features.** Wallet, commands, governance, DM policies — all working and deployed.
+1. **Battle-tested on real hardware.** Repo B has been running in production on ARM64 (Raspberry Pi 5) for weeks — handling real DMs, real wallet transactions on Sepolia, real SIGSEGV crashes and recoveries. This operational knowledge is captured in KNOWN-ISSUES.md, BUILD.md, and the systemd service architecture. It is hard to replicate without running on the same hardware.
 
-2. **Operational maturity on ARM64.** Weeks of production use, documented known issues, systemd integration, crash recovery.
+2. **More user-facing features.** Wallet integration with working balance/tip/governance commands, DM policies, wallet address registry — these represent significant functionality that users interact with directly.
 
-3. **Contributor continuity.** Jimmy has been actively using and iterating on this plugin in a real community setting.
+3. **Contributor continuity.** Jimmy has been actively iterating on this plugin in a real community setting. The commit history reflects real-world debugging (WebSocket instability, IPv6 issues, poll-based fallback, Waku peer discovery) that only comes from production use.
+
+4. **Richer operational tooling.** systemd services, login scripts, control scripts, build guides — production deployment infrastructure that Repo A lacks entirely.
 
 ### Arguments for a New Shared Repo
 
-1. **Neutral ground.** No contributor "loses" their repo.
+1. **Neutral ground.** No contributor "loses" their repo. Both start as equal co-owners.
 
 2. **Clean start.** Opportunity to agree on naming, structure, and ownership together.
 
+3. **Same total effort.** The integration work is the same regardless of which existing repo is chosen — a new repo just removes the "whose repo" question.
+
 ### Attribution
 
-Regardless of which repo is chosen as base, all contributions should be properly attributed via `Co-Authored-By` headers or a `CONTRIBUTORS.md` file. Repo B's wallet module, command system, governance module, operational scripts, and documentation represent significant original work.
+Regardless of which repo is chosen as base, all contributions should be properly attributed via `Co-Authored-By` headers or a `CONTRIBUTORS.md` file. Both repos contain significant original work.
 
 ---
 
