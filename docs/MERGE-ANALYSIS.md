@@ -200,15 +200,15 @@ The wallet module has its own `callRPC` function that reads `STATUS_BACKEND_URL`
 
 Both repositories were audited for credential exposure, injection vulnerabilities, authorization gaps, resource exhaustion, and financial safety (wallet operations). The trust boundary model: config/filesystem = trusted; status-backend on localhost = semi-trusted; Waku network (any peer) = untrusted.
 
-### 3.1 Repo B — Critical Issues
+### 3.1 Repo B — Issues
+
+Note: the hardcoded wallet address and password (`"jimmy-claw-2026"`) in `tip.ts` and `send.ts` are Sepolia testnet values used for development/demo purposes, not production credentials. They are flagged below as a pattern issue (hardcoded fallbacks should not ship to production), not as a credential leak.
 
 | Severity | Issue | Location |
 |----------|-------|----------|
-| **Critical** | Hardcoded wallet password `"jimmy-claw-2026"` — appears in 3 files (`send.ts`, `tip.ts`, `status-login.sh`), permanently in public git history | `src/wallet/send.ts`, `src/commands/tip.ts`, `extras/scripts/status-login.sh` |
-| **Critical** | Hardcoded wallet address + password in plain text in public repo. Wallet `0xB554...` should be considered compromised | `src/commands/tip.ts` |
 | **Critical** | Zero authorization on `!tip` — any Status user can trigger ETH transactions. No sender check, no rate limit. Wallet drainable in 0.01 ETH increments | `src/commands/tip.ts` |
 | **Critical** | Governance double-execution — approved proposals can be executed multiple times (no lock, no status check before send). Double-spend possible | `src/commands/governance.ts` |
-| **Critical** | Hardcoded admin pubkey with no rotation mechanism — if admin account is compromised, governance cannot be recovered | `src/commands/governance.ts` |
+| High | Hardcoded admin pubkey with no rotation mechanism — if admin account is compromised, governance cannot be recovered | `src/commands/governance.ts` |
 | High | Hardcoded Telegram session key (`agent:main:telegram:direct:78701493`) — all inbound Status messages routed to a single Telegram session regardless of sender | `src/channel.ts` |
 | High | Unbounded `seenMessages` Set — grows indefinitely, OOM via message flood from any peer | `src/channel.ts` |
 | High | `STATUS_BACKEND_URL` env var accepted without validation — SSRF redirect if env is compromised | `src/wallet/rpc.ts` |
@@ -217,6 +217,7 @@ Both repositories were audited for credential exposure, injection vulnerabilitie
 | High | `DATA_DIR` interpolated unsanitized into JSON body in shell script — JSON injection | `extras/scripts/status-login.sh` |
 | High | Float precision loss in `ethToWeiHex` — `parseFloat(amount) * 1e18` loses precision beyond 2^53 | `src/wallet/send.ts` |
 | High | Password stored as plaintext in config, no keychain/env-ref pattern | `src/config-schema.ts` |
+| Medium | Hardcoded test wallet password as fallback default in 3 files — bad pattern for production, should require explicit config | `src/wallet/send.ts`, `src/commands/tip.ts`, `extras/scripts/status-login.sh` |
 | Medium | Raw backend error text propagated to chat users — leaks internal paths, stack traces | `src/wallet/rpc.ts`, `src/status-api.ts` |
 | Medium | `chatInfoCache` never cleared — memory growth vector | `src/channel.ts` |
 | Medium | `Math.random()` proposal IDs — trivially guessable, and auto-resolution makes them irrelevant when only one proposal is pending | `src/commands/governance.ts` |
@@ -245,16 +246,16 @@ Both repositories were audited for credential exposure, injection vulnerabilitie
 
 | Aspect | Repo A | Repo B |
 |--------|--------|--------|
-| Critical findings | 0 | 5 |
-| High findings | 4 | 7 |
-| Medium findings | 5 | 4 |
-| Hardcoded credentials | None | 3 files (wallet password, wallet address, admin pubkey) |
+| Critical findings | 0 | 2 (unauthorized transactions, governance double-execution) |
+| High findings | 4 | 8 |
+| Medium findings | 5 | 6 |
+| Hardcoded test values | None | 3 files (testnet wallet password as fallback default) |
 | Financial safety | No wallet code | No authorization, no rate limit, precision bugs |
 | Inbound trust boundary | No sender allowlist, but dispatches through SDK | No sender check, routes to hardcoded Telegram session |
 | Config injection | SSRF via `baseUrl`, path traversal via `dataDir` | SSRF via `port`, JSON injection in shell scripts |
 | Resource exhaustion | WebSocket no backoff | Unbounded Set + Map growth |
 
-**Key takeaway:** Repo B has critical credential and financial safety issues that require immediate remediation regardless of merge direction. Repo A's issues are primarily about input validation and trust boundaries — serious but not exploitable without config access or a compromised backend.
+**Key takeaway:** Repo B has critical financial safety issues (unauthorized transactions, governance double-execution) that must be fixed before production use regardless of merge direction. Repo A's issues are primarily about input validation and trust boundaries — serious but not exploitable without config access or a compromised backend. Both repos share the same pattern of plaintext passwords in config with no keychain integration.
 
 ---
 
@@ -295,7 +296,7 @@ Repo B's wallet, DM, polling, Zod, and operational assets are contributed as PRs
 - Wallet and DM features are additive modules that integrate cleanly
 - Auto-provisioning and login lifecycle are preserved
 - Community management is preserved
-- Zero critical security findings to inherit in the base
+- No critical security findings to inherit in the base
 
 **Cons:**
 - Repo B features need adaptation to Repo A's patterns (e.g., wallet RPC must use `StatusClient`)
@@ -331,7 +332,7 @@ The core from Repo A (SDK pipeline, auto-provisioning, login lifecycle, communit
 - Requires adding tests — from scratch or adapted from Repo A
 - Net result is effectively a rewrite of Repo B's core, preserving only the wallet and command modules
 - Higher risk due to no existing tests to catch regressions
-- 5 critical security issues must be fixed before or during merge
+- 2 critical + 8 high security issues must be fixed before or during merge
 
 **Estimated work:**
 
@@ -344,8 +345,8 @@ The core from Repo A (SDK pipeline, auto-provisioning, login lifecycle, communit
 | Add keyUID persistence | 1–2 hours | High |
 | Port tests (adapt to Repo B patterns) | 6–8 hours | High |
 | Unify dual RPC clients | 2–3 hours | Medium |
-| Fix 5 critical security issues | 4–6 hours | Critical |
-| Fix hardcoded password (rotate + remove from history) | 2–3 hours | Critical |
+| Fix critical security issues (auth, governance) | 3–4 hours | Critical |
+| Fix high security issues (SSRF, rate limiting, etc.) | 4–6 hours | High |
 | Fix ethToWeiHex precision | 1 hour | Low |
 | Fix Zod schema ordering | 30 min | Low |
 | **Total** | **~35–50 hours** | |
@@ -392,7 +393,7 @@ The analysis above is meant to inform a joint decision. Here are the key factors
 
 4. **Asymmetric portability.** Repo B's unique assets (wallet, commands, DM, Zod, polling, scripts, docs) are self-contained modules that port cleanly. Repo A's unique assets (SDK pipeline, auto-provisioning, login lifecycle, community management) are deeply woven into the gateway and harder to extract.
 
-5. **Security posture.** Repo A has zero critical security findings. Repo B has 5 critical issues (hardcoded credentials in 3 files, unauthorized wallet transactions, governance double-execution). Merging into Repo A avoids inheriting these issues in the base; they can be fixed during the porting process.
+5. **Security posture.** Repo A has zero critical security findings. Repo B has 2 critical issues (unauthorized wallet transactions, governance double-execution) and 8 high-severity findings. Merging into Repo A avoids inheriting these issues in the base; they can be fixed during the porting process.
 
 6. **Lower effort.** Option A requires ~20–34 hours; Option B requires ~35–50 hours, largely because Repo B's core must be replaced rather than extended.
 
