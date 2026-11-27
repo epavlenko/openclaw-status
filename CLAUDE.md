@@ -1,5 +1,3 @@
-@AGENTS.md
-
 # CLAUDE.md
 
 Read `AGENTS.md` for project instructions (architecture, build, patterns, gotchas).
